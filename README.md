@@ -39,9 +39,25 @@ $env:EFFECT_CODEGEN = $sdk
 poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 ```
 
+## 项目与命名空间
+
+在工作台选「导入已有项目」登记现有 SDK 工作树，或选「新建项目」初始化独立目录。项目登记保存在服务端 `EFFECT_CONSOLE_DIR/projects.sqlite3`。服务可直接启动，已有的 `EFFECT_FRAMEWORK_ROOT`、`EFFECT_CODEGEN` 绑定会作为初始项目显示。
+
+以下路径以 `/api/v1/console` 为前缀，请求须携带允许的工作台 Origin。目录字段使用服务所在机器的绝对路径。
+
+| 请求 | 请求体或结果 |
+| --- | --- |
+| `GET /projects` | 返回项目 ID、显示名、根目录、工具路径及 `sdkReady`。 |
+| `POST /projects/import` | `{"root":"D:/work/existing","name":"业务系统"}`。登记包含 `sdk/Framework/SDK.hs` 和 `demo/` 的目录。可传 `executable` 指定已构建的 effect-codegen。再次导入同一路径可更新名称或工具。 |
+| `POST /projects` | `{"root":"D:/work/orders","name":"订单","sdk_root":"D:/sdk","namespace":"Orders.App"}`。复制所选版本的 SDK 源码并初始化 Cabal 项目和首个命名空间。可传 `executable` 复用已有工具。 |
+| `POST /projects/{id}/sdk/build` | 在该项目内执行 `cabal build exe:effect-codegen` 并登记本地工具。 |
+| `POST /projects/{id}/namespaces` | `{"namespace":"Payments"}`。创建可编辑的 `Types.hs`、`Effects.hs`、`AST.hs`、`Handlers.hs`、`Main.hs`。已有目录返回 409。 |
+
+图、源码、注册和编译运行均可通过 `/projects/{id}/namespaces/…` 访问。项目中的草稿、编译请求和工作台分析快照按项目区分。模板提供一个 `Start` 节点及 handler；首次生成时由 SDK 写入标准 Generated 模块。新项目的首个命名空间有 Cabal executable，后加的命名空间可由工作台通过现有独立程序构建入口运行。
+
 ## Facade 编辑与 Gened 审阅
 
-接口前缀为 `/api/v1/console/namespaces/{namespace}`。工作树请求需要工作台的 Origin。绑定的框架和本地构建的 SDK 应当来自同一检出。
+接口前缀为 `/api/v1/console/namespaces/{namespace}`。工作树请求需要工作台的 Origin。绑定的框架和本地构建的 SDK 应当来自同一版本。
 
 | 入口 | 数据来源与用途 |
 | --- | --- |

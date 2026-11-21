@@ -4,6 +4,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from pydantic import BaseModel
 
 from ...config import get_app_config
 from ...lsp.analysis.facade import facade
@@ -12,8 +13,10 @@ from ...lsp.analysis.sources import namespace_folder, save_facade, source_docume
 from ...lsp.codegen.registration import add_registration
 from ...lsp.framework import Framework
 from ...lsp.project.model import constructor_name
+from ...lsp.project.scaffold import create_namespace
+from ...lsp.project.workspaces import build_sdk, import_project, lookup, new_project, projects, startup_project
 from ...lsp.runtime.commands import command_output, generate_graph
-from ...lsp.runtime.snapshot import RegistrationConflict, directory
+from ...lsp.runtime.snapshot import RegistrationConflict, console_home, directory, project_directory
 from ...lsp.runtime.workflow import AstLoadError, ast_namespaces, generated_workflow, optimize_workflow
 
 
@@ -31,6 +34,7 @@ router = APIRouter(
     tags=["Console"],
     dependencies=[Depends(check_browser_origin)],
 )
+workspace = APIRouter()
 
 
 def require_origin(request: Request):
@@ -38,18 +42,69 @@ def require_origin(request: Request):
         raise HTTPException(403, "此操作需要工作台的 Origin。")
 
 
-@router.get("/namespaces")
+class ImportProject(BaseModel):
+    root: str
+    name: str = ""
+    executable: str | None = None
+
+
+class NewProject(ImportProject):
+    sdk_root: str
+    namespace: str
+
+
+@router.get("/projects", dependencies=[Depends(require_origin)])
+def list_projects():
+    return projects()
+
+
+@router.post("/projects/import", dependencies=[Depends(require_origin)])
+def register_project(body: ImportProject):
+    return workbench_call(import_project, body.root, body.name, body.executable)
+
+
+@router.post("/projects", status_code=201, dependencies=[Depends(require_origin)])
+def initialize_project(body: NewProject):
+    return workbench_call(new_project, body.root, body.name, body.namespace, body.sdk_root, body.executable)
+
+
+async def bind_project(project_id: str, request: Request):
+    require_origin(request)
+    project = workbench_call(lookup, project_id)
+    request.state.project = project
+    default = startup_project()
+    dest = console_home()
+    if not default or default.id != project.id:
+        dest = dest / "workspaces" / project.id
+    token = project_directory.set(dest)
+    try:
+        yield
+    finally:
+        project_directory.reset(token)
+
+
+def project_root(request: Request):
+    project = getattr(request.state, "project", None)
+    return project.root if project else os.getenv("EFFECT_FRAMEWORK_ROOT")
+
+
+@router.post("/projects/{project_id}/sdk/build", dependencies=[Depends(bind_project)])
+def build_project_sdk(request: Request):
+    return workbench_call(build_sdk, request.state.project)
+
+
+@workspace.get("/namespaces")
 def namespaces(request: Request, workflow: bool = False) -> list[str]:
     names = {path.stem for path in directory().glob("*.json") if path.is_file()}
     if workflow:
         require_origin(request)
-        if root := os.getenv("EFFECT_FRAMEWORK_ROOT"):
+        if root := project_root(request):
             workspace = Path(root).resolve()
             names = set(ast_namespaces(workspace)) | set(source_namespaces(workspace))
     return sorted(names)
 
 
-@router.get("/namespaces/{namespace}")
+@workspace.get("/namespaces/{namespace}")
 def snapshot(namespace: str) -> FileResponse:
     if not published(namespace):
         raise HTTPException(404, "Namespace has no published snapshot")
@@ -69,7 +124,11 @@ def bound_framework(request: Request, namespace: str, *, allow_ast: bool = False
     require_origin(request)
     if not all(map(constructor_name, namespace.split("."))):
         raise HTTPException(404, "无效的命名空间。")
-    root, sdk = os.getenv("EFFECT_FRAMEWORK_ROOT"), os.getenv("EFFECT_CODEGEN")
+    root = project_root(request)
+    project = getattr(request.state, "project", None)
+    sdk = project.executable if project else os.getenv("EFFECT_CODEGEN")
+    if project and not Path(sdk).is_file():
+        raise HTTPException(503, "该项目尚无可用的 effect-codegen，请在项目面板构建 SDK 或导入时指定工具。")
     if not root or not sdk:
         raise HTTPException(503, "后端尚未配置 EFFECT_FRAMEWORK_ROOT 和 EFFECT_CODEGEN。")
     framework = Framework(Path(sdk).resolve(), Path(root).resolve())
@@ -88,49 +147,51 @@ def workbench_call(fn, *args):
         raise HTTPException(404, "找不到绑定的文件或工具。") from error
     except RegistrationConflict as error:
         raise HTTPException(409, str(error)) from error
+    except PermissionError as error:
+        raise HTTPException(403, str(error)) from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
 
-@router.get("/namespaces/{namespace}/facade")
+@workspace.get("/namespaces/{namespace}/facade")
 def declarations(namespace: str, request: Request):
     return workbench_call(facade, bound_framework(request, namespace, allow_ast=True), namespace)
 
 
 def bound_folder(namespace: str, request: Request) -> Path:
     require_origin(request)
-    if not (root := os.getenv("EFFECT_FRAMEWORK_ROOT")):
+    if not (root := project_root(request)):
         raise HTTPException(503, "后端尚未配置 EFFECT_FRAMEWORK_ROOT。")
     return workbench_call(namespace_folder, Path(root).resolve(), namespace)
 
 
-@router.get("/namespaces/{namespace}/gened")
+@workspace.get("/namespaces/{namespace}/gened")
 def generated_module(namespace: str, request: Request, file: str | None = None):
     return workbench_call(source_document, bound_folder(namespace, request), True, file)
 
 
-@router.get("/namespaces/{namespace}/facade/source")
+@workspace.get("/namespaces/{namespace}/facade/source")
 def handwritten_module(namespace: str, request: Request, file: str | None = None):
     return workbench_call(source_document, bound_folder(namespace, request), False, file)
 
 
-@router.put("/namespaces/{namespace}/facade/source")
+@workspace.put("/namespaces/{namespace}/facade/source")
 def write_module(namespace: str, file: str, request: Request, source: str = Body(), if_match: str = Header()):
     return workbench_call(save_facade, bound_folder(namespace, request), namespace, file, source, if_match.strip('"'))
 
 
-@router.get("/namespaces/{namespace}/plan")
+@workspace.get("/namespaces/{namespace}/plan")
 def gen_plan(namespace: str, request: Request):
     return workbench_call(read_prototype, bound_folder(namespace, request), namespace)
 
 
-@router.post("/namespaces/{namespace}/plan")
+@workspace.post("/namespaces/{namespace}/plan")
 def create_gen_plan(namespace: str, request: Request):
     framework = bound_framework(request, namespace, allow_ast=True)
     return workbench_call(generate_graph, namespace, bound_folder(namespace, request), framework)
 
 
-@router.get("/namespaces/{namespace}/workflow")
+@workspace.get("/namespaces/{namespace}/workflow")
 def workflow(namespace: str, request: Request):
     framework = bound_framework(request, namespace, allow_ast=True)
     try:
@@ -139,7 +200,7 @@ def workflow(namespace: str, request: Request):
         raise HTTPException(500, f"无法读取工作流报告：{error}") from error
 
 
-@router.post("/namespaces/{namespace}/workflow/optimize")
+@workspace.post("/namespaces/{namespace}/workflow/optimize")
 async def optimize(namespace: str, request: Request):
     framework = bound_framework(request, namespace, allow_ast=True)
     try:
@@ -152,7 +213,7 @@ async def optimize(namespace: str, request: Request):
         raise HTTPException(502, f"无法取得 SDK 的工作流报告：{error}") from error
 
 
-@router.post("/namespaces/{namespace}/commands/{action}")
+@workspace.post("/namespaces/{namespace}/commands/{action}")
 async def command(namespace: str, action: Literal["compile", "run"], request: Request):
     framework = bound_framework(request, namespace, allow_ast=True)
     return StreamingResponse(command_output(request, framework, namespace, action == "run"),
@@ -160,7 +221,7 @@ async def command(namespace: str, action: Literal["compile", "run"], request: Re
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
-@router.post("/namespaces/{namespace}/registrations", status_code=201)
+@workspace.post("/namespaces/{namespace}/registrations", status_code=201)
 def create_registration(namespace: str, document: dict, request: Request, if_match: str = Header()):
     framework = bound_framework(request, namespace, allow_ast=True)
     try:
@@ -169,3 +230,15 @@ def create_registration(namespace: str, document: dict, request: Request, if_mat
         raise HTTPException(409, str(error)) from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@workspace.post("/namespaces", status_code=201)
+def initialize_namespace(request: Request, namespace: str = Body(embed=True)):
+    require_origin(request)
+    if not (root := project_root(request)):
+        raise HTTPException(503, "请先导入或新建项目。")
+    return workbench_call(create_namespace, Path(root).resolve(), namespace)
+
+
+router.include_router(workspace, prefix="/projects/{project_id}", dependencies=[Depends(bind_project)])
+router.include_router(workspace)

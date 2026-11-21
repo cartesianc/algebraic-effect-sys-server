@@ -3,6 +3,7 @@
 import json
 import os
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -11,8 +12,15 @@ from ..framework import Framework
 from ..project.model import constructor_name
 
 
-def directory() -> Path:
+project_directory: ContextVar[Path | None] = ContextVar("console_project_directory", default=None)
+
+
+def console_home() -> Path:
     return Path(os.environ.get("EFFECT_CONSOLE_DIR", ".console")).resolve()
+
+
+def directory() -> Path:
+    return project_directory.get() or console_home()
 
 
 class RegistrationConflict(ValueError):
