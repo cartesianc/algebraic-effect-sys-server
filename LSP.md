@@ -17,9 +17,9 @@
 
 ## 代码长什么样
 
-在 `feat/request-chains` 的 Console 快照中，普通资产的 `requests` 声明把唯一生产方作为请求方的前驱，生产方本身的 Input 和 requests 也进入注册图。以 Crawler 为例，`PrintPage` 请求 `StartPageSummary`，生产链包含 `FetchPage → KeepPageBody → ExtractPage`。`FetchPage` 请求 `StartURL`，其 Input `CrawlSession` 又请求 `CrawlSessionInfo`。图上的共用卡片表示同一份注册，每个请求方执行时各自发起请求。图上每条 Input 表示已声明的依赖。普通 Context 或 Pure 通过方法体中的 `rawinput` 拉取上游，在没有同次输出可回放时，调用次数取决于方法体实际读取几次。[候选 SDK 的生产规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/d10d717/docs/CORE_DESIGN.md#request-production)
+Console v1 的每条绑定通过 `before` 按序给出普通资产生产入口（requests）、直接前驱（input）和持续会话请求（session），通过 `raw` 给出 rawinput 或 rawstream 的来源。步骤带有目标 method 和所属 effect。session 的 method 为空串，effect 指向持续 Context。前端跟随方法绑定展开，遇到会话边时在该 Context 处停止。旧快照缺少 before 时才从注册推导。以 Crawler 为例，`PrintPage` 请求 `StartPageSummary`，生产链包含 `FetchPage → KeepPageBody → ExtractPage`。`FetchPage` 请求 `StartURL`，其 Input `CrawlSession` 又请求 `CrawlSessionInfo`。图上的共用卡片表示同一份注册，每个请求方执行时各自发起请求。图上实线既可表示入口前驱，也可表示 raw 读取的上游。普通 Context 或 Pure 通过方法体中的 `rawinput` 拉取上游，在没有同次输出可回放时，调用次数取决于方法体实际读取几次。[SDK 的 Console 导出](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/f36bb4e/sdk/Framework/Gen/Console.hs)
 
-普通 `requires` 读取已发布的值。若没有任何注册请求该契约，SDK 会报告 `Asset never requested`；成功生成还要满足既有的 AST 可达性等检查。alternative 的判定 Context 由 selector 尝试解析，持续 Context 由会话交付。单独执行普通资产的上游句柄不会自动发布它。注册接口以 422 返回 SDK 诊断原文。切换工作树时重新发布 Console 快照，JSON 仍为 v1。
+普通 `requires` 读取已发布的值。若没有任何注册请求该契约，SDK 会报告 `Asset never requested`；成功生成还要满足既有的 AST 可达性等检查。alternative 的判定 Context 由 selector 尝试解析。对持续资产，requests 启动或加入会话，把当前一条固定给本次调用；lifelong 末端的 streams 订阅也会驱动会话。requires 只读已有会话。只有 requires、缺少请求方和订阅方时，SDK 同样报告 `Asset never requested`。单独执行普通资产的上游句柄不会自动发布它。注册接口以 422 返回 SDK 诊断原文。切换工作树时重新发布 Console 快照，JSON 仍为 v1。
 
 当前工作树的顺序组合写作 `chain [node "Report"]`。SDK 在 Console 快照中将它导出为 `workflow.kind = "Chain"`，Python 原样传递 `kind` 和有序的 `children`。
 
@@ -241,7 +241,7 @@ LSP 按 namespace 与方法名保存任务说明，用 SDK 绑定的定义身份
 | AST 模块或分支 | 模块内具名定义、被引用位置、当前选中根中的挂载路径、子节点、链入口、scope 开启、读点和中间件挂载。同一分支可对应多个位置，备用导出要标明未挂载。 |
 | 资产 | 契约名、唯一生产 Context 和 parser、表示类型在使用处的拼写和范围、已解析的内建种类或业务类型定义、各消费方的访问方式。业务类型可跳转至构造器及字段。依赖出错时保留原文和范围，将身份标为未解析。 |
 
-查询 `RunningTotal` 应返回类型 `LinesDemo.Types.Total`、生产 Context `CountParser` 和 parser `parseTotal`。`ShowTotal` 通过 `streams` 持续执行，`Report` 通过 `requires` 有限读取，两个方法体都用 `require @Total`。默认的 `monitorLines` 内复用 `TextCounter` 的同次输出，lifelong 完成后的 `Report` 从会话读取保留的最新发布。默认 Prototype 也列出根级候选计划 `Derive "TextLine"`，UI 须标明计划所属范围。将 `ast` 改为 `snapshotAst` 并把 Hanging 目标同步改到 `snapshotAst` 后，独立的派生会话可以为 `Report` 的一次读取提供值。[两种会话计划与工作流读点](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/demo/LinesDemo/Generated/Prototype.hs)
+查询 `RunningTotal` 应返回类型 `LinesDemo.Types.Total`、生产 Context `CountParser` 和 parser `parseTotal`。`ShowTotal` 通过 `streams` 持续执行，`Report` 通过 `requires` 有限读取，两个方法体都用 `require @Total`。默认的 `monitorLines` 内复用 `TextCounter` 的同次输出，lifelong 完成后的 `Report` 从会话读取保留的最新发布。默认 Prototype 也列出根级候选计划 `Derive "TextLine"`，UI 须标明计划所属范围。将 `ast` 改为 `snapshotAst` 并把 Hanging 目标同步改到 `snapshotAst` 后，需要显式请求 `RunningTotal` 才能在没有已启动会话时为 `Report` 取得交付。[两种会话计划与工作流读点](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/f36bb4e/demo/LinesDemo/Generated/Prototype.hs)
 
 `String` 和 `[String]` 各按完整的 `TypeRep` 识别，注册中的 `FilePath` 与 `String` 同型。业务表示类型按当前编译单元、定义模块和本地声明名核对，补全和跳转以解析出的定义去重。`FacadeProbe` 的 `ReportBody` 和 `ReplyBody` 各有生产方，两者都跳到 `FacadeProbe.Types.Body`。生成的 Prototype 对二者均写 `SDK.typeRef @AssetTypes.Body`，在目标组件中重新取得身份。GHCi 分析时的单元标识只用于该编译上下文。[SDK 的类型身份](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/sdk/Framework/Language/Registration.hs) · [FacadeProbe 生成产物](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/d10d717/demo/FacadeProbe/Generated/Prototype.hs)
 
@@ -340,7 +340,7 @@ HLS 诊断走标准 `textDocument/publishDiagnostics`，框架继续走 `framewo
 
 ### 阶段 C　上下文、变更影响与资源观测
 
-- **书写上下文。** 查询 `parseTotal`，可看到 `countText` 输出的行数和字符数两段十进制文本、`Total String String` 的构造器、订阅的 `ShowTotal` 与有限读取的 `Report`，以及两者的实际 `require @Total`。把 `ast` 和 Hanging 目标一起切到 `snapshotAst` 后，`Report` 位于 `[1]`，`TraceLine` 挂在根 `[]`。此时有限读取可启动 `Derive "TextLine"`。重新生成、构建并运行后，验收 `Report` 执行一次。
+- **书写上下文。** 查询 `parseTotal`，可看到 `countText` 输出的行数和字符数两段十进制文本、`Total String String` 的构造器、订阅的 `ShowTotal` 与有限读取的 `Report`，以及两者的实际 `require @Total`。把 `ast` 和 Hanging 目标一起切到 `snapshotAst` 后，`Report` 位于 `[1]`，`TraceLine` 挂在根 `[]`。在 `Report` 上增加 `requests "RunningTotal"` 并保留 requires，使入口启动或加入派生会话。重新生成、构建并运行后，验收 `Report` 执行一次。
 - **变更预览。** 在默认工作流中，把 `countText` 的历史统计改为 `Line text <- require @Line`，只输出 `rawoutput ["1", show (length text)]`，保留 `TextCounter` 的 `streams "TextLine"`。预览应显示 `LineParser.effectHistory` 由真变假，`CountTextLayer` 仍有 `Streams Line m`、`EndsStream m`，方法边仍是 `RunTextCounterGen → StreamTextLineGen`。若再把该 demand 改为 `requires`，SDK 在声明阶段报告 `Context CountParser declares stream = True but nothing drives it continuously`。网页显示本次诊断，旧图带上原 revision。
 - **资源生命周期。** 查询 `nextLine` 能定位 `MonadMask`、`bracket` 和释放函数 `liftIO . hClose`。在临时副本分别触发正常 EOF、`parseLine` 对一行执行 `raise`、另一 Haskell 线程在 `bracket` 使用期间向来源线程递送 `ThreadKilled`。在 `openFile` 成功后和实际 `hClose` 完成后分别记录，每例应看到一次打开和一次关闭。parser 失败时还应核对业务输出中的 `Failed` 与来源 `LineParser`，这条路径的程序退出码可以为 0。`closeInput` 的日志单独计数。
 - **历史与交接。** 在有两次发布和两个读取游标的场景中，选中第二条时仍能读到第一条历史。核对交接与开启参数时，来自这份视图的生产身份只有第二条。若另一游标尚欠第一条，其队列条目与伴随绑定仍承担独立的保留义务。实际释放时刻须通过运行观测核验。

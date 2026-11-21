@@ -173,7 +173,7 @@ SDK 检查通过后，生成的 `Prototype` 在目标程序中通过类型应用
 
 | 类方法 | 抽取 | 检查 |
 | --- | --- | --- |
-| `require @T` | 表示类型 T、当前 effect 绑定、契约 | `requires` 或 `streams` 提供 `Reads T m`。普通资产优先使用本次捕获，否则读取共享的最新发布，缺值走等待／耗尽协议。持续资产读固定交付或有限快照的当前 T。`requests` 只驱动生产。每个 `requires`／`streams` 的读取依据由 SDK 汇总该 effect 的方法和控制流。 |
+| `require @T` | 表示类型 T、当前 effect 绑定、契约 | `requires` 或 `streams` 提供 `Reads T m`。普通资产优先使用本次捕获，否则读取共享的最新发布，缺值走等待／耗尽协议。持续资产读已有会话的当前交付。`requests` 驱动普通生产或启动、加入持续会话。每个 `requires`／`streams` 的读取依据由 SDK 汇总该 effect 的方法和控制流。 |
 | `stream @T` | 表示类型 T、持续契约、生产 Context | 仅在以 `streams` 读取该持续资产的绑定上提供 `Streams T m`，返回 `Flow T`。`x :> xs` 的头是与 `require @T` 一致的本次值，尾部为同一会话自开始以来更早发布的值，最新在前，包含本读取方登记前的发布。gen 从已解析的方法体识别历史读取，按绑定解析契约，在生产 Context 上设置 `effectHistory = True`。 |
 | `rawinput` | 实际绑定与直接前驱 | 挂接的 Context parser 或有合法 Input 的 Pure 可读本次原始输出。若上游是 Stream，单次 `rawemit` 的输入以单元素列表交付。 |
 | `rawemit`、`streamEnd` | 生产与封口的位置 | Stream 来源的 Layer 提供 `Emits`、`StreamEnds`、`MonadMask`。来源可在 `bracket` 的使用区内逐条交付。有限来源耗尽时调用 `streamEnd`，正常返回可继续下一步。持续运行的来源（例如 `StreamDemo.nextReading`）允许持续发布，仅凭未找到 `streamEnd` 不产生缺失诊断。 |
@@ -205,7 +205,7 @@ agentic 限制在单个方法体，模型拿到的就是它能知道的全部。
 | 编号 | 模块 | 内容 |
 | --- | --- | --- |
 | E1 | 编辑事务 | 沿用 LSP.md 的 `applyEdits`。补充撤销：每次成功的事务记录反向补丁，最近一次可撤回，撤回本身也是一次事务。 |
-| E2 | 补全 | 按 R4 和 SDK 注册角色过滤。`input` 提供合法前驱及适用的 `Root` / `None`，`streams` 提供持续资产，`requests` 只提供可被请求的普通资产。资产类型补全只提供两种内建表示及当前命名空间 `Types` 的合法定义，限定名或别名解析后再去重。方法体按真实 Layer 区分可 `require @T` 与可 `stream @T` 的类型。 |
+| E2 | 补全 | 按 R4 和 SDK 注册角色过滤。`input` 提供合法前驱及适用的 `Root` / `None`，`streams` 提供持续资产，`requests` 提供普通资产和持续资产。资产类型补全只提供两种内建表示及当前命名空间 `Types` 的合法定义，限定名或别名解析后再去重。方法体按真实 Layer 区分可 `require @T` 与可 `stream @T` 的类型。 |
 | E3 | 重命名 | effect、契约、handler、AST 绑定，生成一组 `planEdits` 跨文件一次应用，同时迁移 agentic 标记的键。 |
 | E4 | 快速修复 | 为未绑定的 handler 生成骨架、为缺生产方的契约生成 Context、补 import、AST 抽出或合并模块。 |
 
@@ -235,7 +235,7 @@ agentic 限制在单个方法体，模型拿到的就是它能知道的全部。
 
 **阶段 C：书写前提与变化。** 3.5、V3，3.7 只建位置。
 
-- 查询 `LinesDemo.parseTotal` 的 agentic 上下文，应看到 `Total String String` 的定义、`TextCounter` 绑定的 `countText` 以 `stream @Line` 统计并 `rawoutput` 两段文本的实现，以及 `RunningTotal` 的两个消费方：`ShowTotal` 声明 `streams`、`Report` 声明 `requires`，二者的方法体当前均使用 `require @Total`。默认 `monitorLines` 内，`CountParser` 复用 `TextCounter` 的同次输出（`ReuseOutput`）。若按示例一起切换 `ast` 和 Hanging 目标为 `snapshotAst`，有限的 `Report` 读取可启动独立的 `Derive "TextLine"`，`Report` 自身仍只执行一次。
+- 查询 `LinesDemo.parseTotal` 的 agentic 上下文，应看到 `Total String String` 的定义、`TextCounter` 绑定的 `countText` 以 `stream @Line` 统计并 `rawoutput` 两段文本的实现，以及 `RunningTotal` 的两个消费方：`ShowTotal` 声明 `streams`、`Report` 声明 `requires`，二者的方法体当前均使用 `require @Total`。默认 `monitorLines` 内，`CountParser` 复用 `TextCounter` 的同次输出（`ReuseOutput`）。若按示例一起切换 `ast` 和 Hanging 目标为 `snapshotAst`，须为 `Report` 加上 `requests "RunningTotal"` 才能在没有已有会话时启动独立派生，原有 requires 读取该次交付。
 - 查询 `LinesDemo.nextLine`，看到来源 Layer 的 `MonadMask`、导入的 `bracket` 和传给 `bracket` 的释放函数 `liftIO . hClose`。查询消费方 `countText` 则看到 `Streams Line m` 与 `EndsStream m`。若验证运行行为，在临时工作副本记录 `bracket` 的 release，分别触发 EOF、下游 parser 失败和来源取消，成功打开的每个句柄都应释放一次。`closeInput` 单独观察，不能用它代替 `hClose` 的证据。
 - 在候选补丁中把 `countText` 从 `stream @Line` 改为 `require @Line`，并将统计逻辑改为只处理本行。预览应显示 `LineParser.effectHistory` 取消。`TextCounter` 仍声明 `streams` 时，`CountTextLayer` 保留 `Streams Line m`，读取方法边仍为 `RunTextCounterGen → StreamTextLineGen`。若再单独将 `TextCounter` 的声明改为 `requires`，当前 workflow 会失去这个 target 的持续驱动，`CountParser` 的 `stream = True` 也会失去依据。预览须显示当前 revision 的 SDK 诊断，把上次成功的图标为旧快照。
 - 在同一会话已有两次发布的场景中，领取第二条时，历史视图应可读到第一条。核对交接与 scope 开启时，只有第二条的生产身份来自这份当前视图。若另一个游标仍欠第一条交付，其条目及伴随绑定仍按队列义务保留。验收静态图时只核对计划，实际释放时刻由运行观测验证。

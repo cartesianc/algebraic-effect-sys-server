@@ -62,7 +62,7 @@ Workflow 用 `GET /api/v1/console/namespaces?workflow=true` 同时列出绑定�
 
 工作流中的 `chain [...]` 对应快照节点 `{"kind": "Chain", ...}`，`children` 保留声明顺序。更新旧工作树的顺序组合名称后，重新构建 SDK 并发布相应命名空间的快照。
 
-使用 `feat/request-chains` 时，将 SDK、工作树和快照目录绑定在同一版本，并重新发布快照。工作台从 v1 注册数据沿 Input 和 `requests` 展开消费链。普通 Context 由请求方驱动，单独执行上游句柄不会发布资产。普通读取缺少请求方时，注册写入接口返回 422，并保留 `Asset never requested` 诊断；持续资产与 alternative 判定资产使用各自的生产协议。[框架规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/d10d717/docs/CORE_DESIGN.md#request-production)
+使用 `feat/request-chains` 时，将 SDK、工作树和快照目录绑定在同一版本，并重新发布快照。Python 原样发布 v1 的 `bindings[].before` 与 `raw`，工作台据此展开消费链。旧快照缺少入口步骤时，工作台沿注册的 Input 和 requests 展开。普通 Context 由请求方驱动，单独执行上游句柄不会发布资产。普通读取缺少请求方时，注册写入接口返回 422，并保留 `Asset never requested` 诊断；持续资产的 requests 启动或加入会话，requires 读取已有会话，lifelong 的 streams 也可驱动交付。持续资产有 requires、缺少 requests 和 streams 时也会被拒绝。alternative 判定资产由选择入口驱动。[框架规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/f36bb4e/docs/CORE_DESIGN.md#request-production)
 
 从 Console 添加注册、编译或执行程序前，先按[绑定框架工作树](#framework-root)启动服务。
 
