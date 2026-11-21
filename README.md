@@ -31,6 +31,8 @@ SDK 的 `console Namespace` 复用组合分析，从同一个 Prototype 导出�
 
 FastAPI 的 `GET /api/v1/console/namespaces` 列出已发布的命名空间，`GET /api/v1/console/namespaces/{namespace}` 返回快照及分析时间。分析由本地发布命令触发。
 
+Workflow 用 `GET /api/v1/console/namespaces?workflow=true` 同时列出绑定工作树中含 `AST.hs` 的命名空间。`GET …/{namespace}/workflow` 返回生成报告的状态；`POST …/{namespace}/workflow/optimize` 运行只读 AST 分析，源码加载失败时以 422 返回 GHC 文本。这些工作树请求使用与编译相同的 Origin 校验。
+
 工作流中的 `chain [...]` 对应快照节点 `{"kind": "Chain", ...}`，`children` 保留声明顺序。更新旧工作树的顺序组合名称后，重新构建 SDK 并发布相应命名空间的快照。
 
 从 Console 添加注册、编译或执行程序前，在启动服务的终端绑定本地工作树和已构建的 SDK。

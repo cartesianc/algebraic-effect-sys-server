@@ -3,13 +3,15 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from ...config import get_app_config
 from ...lsp.codegen.registration import add_registration
 from ...lsp.framework import Framework
+from ...lsp.project.model import constructor_name
 from ...lsp.runtime.commands import command_output
 from ...lsp.runtime.snapshot import RegistrationConflict, directory
+from ...lsp.runtime.workflow import AstLoadError, ast_namespaces, generated_workflow, optimize_workflow
 
 
 def check_browser_origin(request: Request) -> None:
@@ -28,14 +30,24 @@ router = APIRouter(
 )
 
 
+def require_origin(request: Request):
+    if not request.headers.get("origin"):
+        raise HTTPException(403, "此操作需要工作台的 Origin。")
+
+
 @router.get("/namespaces")
-def namespaces() -> list[str]:
-    return sorted(path.stem for path in directory().glob("*.json") if path.is_file())
+def namespaces(request: Request, workflow: bool = False) -> list[str]:
+    names = {path.stem for path in directory().glob("*.json") if path.is_file()}
+    if workflow:
+        require_origin(request)
+        if root := os.getenv("EFFECT_FRAMEWORK_ROOT"):
+            names.update(ast_namespaces(Path(root).resolve()))
+    return sorted(names)
 
 
 @router.get("/namespaces/{namespace}")
 def snapshot(namespace: str) -> FileResponse:
-    if namespace not in namespaces():
+    if not published(namespace):
         raise HTTPException(404, "Namespace has no published snapshot")
     return FileResponse(
         directory() / (namespace + ".json"),
@@ -44,15 +56,46 @@ def snapshot(namespace: str) -> FileResponse:
     )
 
 
-def bound_framework(request: Request, namespace: str) -> Framework:
-    if not request.headers.get("origin"):
-        raise HTTPException(403, "此操作需要工作台的 Origin。")
-    if namespace not in namespaces():
-        raise HTTPException(404, "该命名空间尚未发布。")
+def published(namespace: str) -> bool:
+    return (all(map(constructor_name, namespace.split(".")))
+            and (directory() / (namespace + ".json")).is_file())
+
+
+def bound_framework(request: Request, namespace: str, *, allow_ast: bool = False) -> Framework:
+    require_origin(request)
+    if not all(map(constructor_name, namespace.split("."))):
+        raise HTTPException(404, "无效的命名空间。")
     root, sdk = os.getenv("EFFECT_FRAMEWORK_ROOT"), os.getenv("EFFECT_CODEGEN")
     if not root or not sdk:
         raise HTTPException(503, "后端尚未配置 EFFECT_FRAMEWORK_ROOT 和 EFFECT_CODEGEN。")
-    return Framework(Path(sdk).resolve(), Path(root).resolve())
+    framework = Framework(Path(sdk).resolve(), Path(root).resolve())
+    if not published(namespace):
+        ast = framework.root.joinpath("demo", *namespace.split("."), "AST.hs").resolve()
+        if not (allow_ast and ast.is_relative_to(framework.root / "demo") and ast.is_file()):
+            raise HTTPException(404, "找不到工作流。" if allow_ast else "该命名空间尚未发布。")
+    return framework
+
+
+@router.get("/namespaces/{namespace}/workflow")
+def workflow(namespace: str, request: Request):
+    framework = bound_framework(request, namespace, allow_ast=True)
+    try:
+        return generated_workflow(framework.root, namespace)
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        raise HTTPException(500, f"无法读取工作流报告：{error}") from error
+
+
+@router.post("/namespaces/{namespace}/workflow/optimize")
+async def optimize(namespace: str, request: Request):
+    framework = bound_framework(request, namespace, allow_ast=True)
+    try:
+        return {"report": await optimize_workflow(framework, namespace)}
+    except AstLoadError as error:
+        return PlainTextResponse(str(error), status_code=422)
+    except TimeoutError as error:
+        raise HTTPException(504, "AST 优化超过 120 秒。") from error
+    except (OSError, ValueError) as error:
+        raise HTTPException(502, f"无法取得 SDK 的工作流报告：{error}") from error
 
 
 @router.post("/namespaces/{namespace}/commands/{action}")

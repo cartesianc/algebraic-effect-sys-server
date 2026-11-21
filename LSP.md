@@ -9,6 +9,8 @@
 | Effect 模板工具，已实现 | SDK 的 `read-effect` 从标准输入解析单条表达式，`read-effects Namespace` 查看本地注册列表。Python 的 `read`、`generate`、`inspect` 可在命令行使用。 |
 | 框架 SDK，待交付 | `effect-codegen read Namespace` 提供带源码位置的声明 JSON；只读 `effect-codegen check Namespace` 提供语义检查及结构化结果。方法体占位 `agentic (Agentic "任务键")` 的导出和识别也待实现。 |
 | Python 服务，已实现 | FastAPI 的 `GET /api/v1/test/` 可验证 HTTP 服务已启动。[启动说明](README.md) |
+| Workflow 缓存，已实现 | `GET /api/v1/console/namespaces/{ns}/workflow` 核对绑定工作树中的源码指纹，返回 `missing`、`stale` 或 `fresh`。后两者附生成时的完整报告。 |
+| Workflow 优化，已实现 | `POST /api/v1/console/namespaces/{ns}/workflow/optimize` 在绑定工作树执行只读的 `ast`，返回当前规范树和结构诊断。源码加载失败时返回 422 及 GHC 原文。两个接口均需要获准的 Origin，支持只有 AST.hs 的命名空间。 |
 | Python LSP，待实现 | WebSocket `/api/v1/lsp` 和下文全部 `framework/*` 消息。Python 负责文件、版本、索引、编辑和诊断投递。可选 HLS 负责编辑中的 Haskell 反馈。 |
 
 本文和提案均以框架 `main` 的 `ed5273d` 为基线；AST 的规范形式、`chain` 写法和 `ast` 命令自 `main` 的 [`5b86712`](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/tree/5b86712) 起可用，文中的 `NodeId` 按规范形式书写。每份快照同时记录业务工作区的 revision 和实际分析所用的 SDK revision，网页可据此判断图、诊断与编辑预览对应哪一版源码。[框架基线](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/tree/ed5273d) · [协议与交付范围](PROPOSAL.md)
@@ -46,6 +48,7 @@ server/
     │   ├── exception/、log/     HTTP 异常和日志
     │   └── router/
     │       ├── test.py          现有 GET /api/v1/test/
+    │       ├── console.py       注册快照、工作流报告、编译和执行
     │       └── lsp.py           规划：WebSocket 握手与收发
     └── lsp/                     单条 Effect 工具已接通，其余按阶段落地
         ├── session.py           消息路由、保存回执、发布诊断
@@ -60,6 +63,7 @@ server/
         │   └── impact.py        使用模型与 Prototype 比较两个版本的变化
         ├── agent/               context.py、prompt.py 提供书写上下文；runner.py 预留
         ├── runtime/
+        │   ├── workflow.py      读取生成的工作流报告、校验指纹和运行只读 AST 优化
         │   ├── snapshot.py      保存每个命名空间最近一次成功的结构快照
         │   ├── scope_tree.py    显式 scope 节点与关系
         │   ├── effect_graph.py  方法图及可渲染的关系

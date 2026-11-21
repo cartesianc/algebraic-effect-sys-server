@@ -79,6 +79,15 @@ async def stop_process(process: subprocess.Popen):
     await asyncio.to_thread(process.wait)
 
 
+def start_process(framework: Framework, args, *, stderr, stream=False):
+    options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+               else {"start_new_session": True})
+    return subprocess.Popen(
+        args, bufsize=0, cwd=framework.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=stderr, env={**os.environ, "EFFECT_CONSOLE_STREAM": "1"} if stream else None, **options,
+    )
+
+
 async def command_output(request: Request, framework: Framework, ns: str, execute: bool):
     try:
         if not all(constructor_name(part) for part in ns.split(".")):
@@ -86,13 +95,8 @@ async def command_output(request: Request, framework: Framework, ns: str, execut
         with namespace_lock(ns):
             async for title, args in steps(framework, ns, execute):
                 yield event("stage", text=title)
-                options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
-                           else {"start_new_session": True})
                 # A pipe reader thread also works with Windows selector event loops.
-                process = subprocess.Popen(
-                    args, bufsize=0, cwd=framework.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT, env={**os.environ, "EFFECT_CONSOLE_STREAM": "1"}, **options,
-                )
+                process = start_process(framework, args, stderr=subprocess.STDOUT, stream=True)
                 read = asyncio.create_task(asyncio.to_thread(process.stdout.read, 8192))
                 decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
                 try:
@@ -119,6 +123,8 @@ async def command_output(request: Request, framework: Framework, ns: str, execut
                 if code:
                     yield event("exit", code=code)
                     return
+                if title == "编译":
+                    yield event("compiled")
             yield event("exit", code=0)
     except (OSError, ValueError, subprocess.SubprocessError, NotImplementedError) as error:
         yield event("error", text=str(error) or type(error).__name__)
