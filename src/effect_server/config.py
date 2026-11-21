@@ -50,10 +50,7 @@ def get_config() -> RootConfig:
   return config
 
 def get_app_config() -> AppConfig:
-  global config
-  if config is None:
-    config = load_config()
-  return config.app
+  return get_config().app
 
 
 __all__ = ['get_config', 'get_app_config', ]

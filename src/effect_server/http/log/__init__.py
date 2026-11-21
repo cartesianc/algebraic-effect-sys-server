@@ -23,7 +23,6 @@ ch_handler.setFormatter(COLOR_FORMATTER)
 
 
 logger = logging.getLogger("tickbutcherserver")
-# logger.addHandler(file_handler)
 logger.addHandler(ch_handler)
 logger.setLevel(logging.INFO)
 

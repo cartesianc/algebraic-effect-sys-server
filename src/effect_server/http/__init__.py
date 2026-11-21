@@ -1,45 +1,23 @@
-
-import asyncio
-from http import server
-
-from fastapi.responses import JSONResponse
 import importlib
 import pkgutil
 import sys
-from typing import List, Any
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.concurrency import asynccontextmanager
+from fastapi.responses import JSONResponse
+
 from . import router
 from .exception import HttpServiceException
-from ..config import get_app_config
 from .log import logger
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-  config = get_app_config()
-  tasks:List[asyncio.Task]= []
   logger.info("应用程序启动")
-  
-  # 初始化数据库
-#   try:
-#     await init_db_engine(config.database_url)
-#   except Exception as e:
-#     logger.error(f"数据库初始化失败: {str(e)}")
-#     raise Exception("数据库初始化失败")
-
-  
   try:
-    
     yield
-    
   finally:
-
-    logger.info(f"应用程序关闭")
-    
-    for task in tasks:
-      task.cancel()
-      await task
+    logger.info("应用程序关闭")
 
 
 def create_app() -> FastAPI:
