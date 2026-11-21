@@ -6,7 +6,8 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from ...config import get_app_config
-from ...lsp.analysis.sources import facade, namespace_folder, save_facade, source_document, source_namespaces
+from ...lsp.analysis.facade import facade
+from ...lsp.analysis.sources import namespace_folder, save_facade, source_document, source_namespaces
 from ...lsp.codegen.registration import add_registration
 from ...lsp.framework import Framework
 from ...lsp.project.model import constructor_name

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 
+from .analysis.facade import facade
 from .analysis.read import read_effect, read_namespace
 from .analysis.sources import namespace_folder, source_document
 from .codegen.effect import generate_effect
@@ -30,7 +31,9 @@ def main():
     commands.add_parser("generate", help="render and verify one JSON document from UTF-8 stdin")
     inspect = commands.add_parser("inspect", help="read registrations in a trusted namespace")
     inspect.add_argument("namespace")
-    inspect.add_argument("--name", help="select a registration by its exact effect name")
+    projection = inspect.add_mutually_exclusive_group()
+    projection.add_argument("--name", help="select a registration by its exact effect name")
+    projection.add_argument("--cards", action="store_true", help="read the Facade workbench card model")
     commands.add_parser("snapshot", help="publish the console graph and workflow").add_argument("namespace")
     review = commands.add_parser("gened", help="inspect an on-disk Generated Haskell module")
     review.add_argument("namespace")
@@ -38,7 +41,7 @@ def main():
     args = parser.parse_args()
     if args.command != "gened" and not args.sdk:
         parser.error("--sdk is required for SDK commands")
-    framework = Framework(args.sdk, args.root) if args.sdk else None
+    framework = Framework(args.sdk, args.root.resolve()) if args.sdk else None
     try:
         if args.command == "snapshot":
             print(publish(args.namespace, framework))
@@ -53,6 +56,10 @@ def main():
             result = source_document(folder, True, args.file)
         elif args.command == "read":
             result = read_effect(sys.stdin.buffer.read().decode("utf-8-sig"), framework)
+        elif args.cards:
+            result = facade(framework, args.namespace)
+            if "error" in result:
+                raise ValueError(result["error"])
         else:
             result = read_namespace(args.namespace, framework)
             if args.name is not None:

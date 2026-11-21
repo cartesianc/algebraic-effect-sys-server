@@ -6,10 +6,8 @@ from pathlib import Path
 from tree_sitter import Language, Parser
 import tree_sitter_haskell
 
-from ..framework import Framework
 from ..project.model import constructor_name
 from ..runtime.snapshot import RegistrationConflict, atomic_write, namespace_lock
-from .read import read_namespace
 
 
 HASKELL = Language(tree_sitter_haskell.language())
@@ -53,21 +51,6 @@ def modules(folder: Path, generated: bool) -> dict[str, Path]:
 
 def revision(data: bytes) -> str:
     return sha256(data).hexdigest()
-
-
-def facade(framework: Framework, namespace: str) -> dict:
-    files = modules(namespace_folder(framework.root, namespace), False)
-    if "Effects.hs" not in files:
-        return {"files": list(files), "editable": False, "registrations": [], "error": "缺少 Effects.hs"}
-    effects = files["Effects.hs"]
-    original = effects.read_bytes()
-    try:
-        data = read_namespace(namespace, framework)
-    except ValueError as exc:
-        data = {"editable": False, "registrations": [], "error": str(exc)}
-    if effects.read_bytes() != original:
-        raise RegistrationConflict("读取期间 Effects.hs 已更改，请刷新。")
-    return {**data, "namespace": namespace, "revision": "facade:" + revision(original), "files": list(files)}
 
 
 def inspect_haskell(raw: bytes) -> dict:
@@ -132,7 +115,7 @@ def source_document(folder: Path, generated: bool, file: str | None) -> dict:
     if file not in files:
         raise FileNotFoundError(file)
     raw = files[file].read_bytes()
-    parsed = inspect_haskell(raw) if generated else {}
+    parsed = inspect_haskell(raw)
     return {"files": list(files), "file": file, "source": raw.decode("utf-8"),
             "revision": revision(raw), **parsed}
 

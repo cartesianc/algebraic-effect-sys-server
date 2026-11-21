@@ -45,11 +45,13 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 
 | 入口 | 数据来源与用途 |
 | --- | --- |
-| `GET /facade` | SDK 的 `read-effects` 解析当前手写注册，返回可编辑性、源码范围及声明版本。 |
-| `GET /facade/source?file=Effects.hs` | 列出并读取业务 Haskell 模块。 |
+| `GET /facade` | SDK 读取手写注册。响应中的 `graph.cards`、`graph.edges` 和 `graph.handlers` 描述注册、资产、Input、demand 与手写方法绑定。源码定位携带文件指纹和起止行。 |
+| `GET /facade/source?file=Effects.hs` | 读取业务 Haskell 模块的原文、定义索引及语法诊断。 |
 | `PUT /facade/source?file=Effects.hs` | 以 JSON 字符串提交源码，`If-Match` 使用读取时的文件 SHA-256。冲突返回 409。 |
 | `GET /gened?file=Handlers.hs` | tree-sitter-haskell 解析磁盘上的 Generated 模块，返回原文、模块名、定义行范围、模块内同名引用及语法诊断。 |
 | `GET /plan` | SDK 从当前业务声明计算 `chains`、绑定与步骤。生成失败返回 422 和 SDK 诊断。此操作只读。 |
+
+命令行运行 `poetry run python -m effect_server.lsp --root $framework --sdk $sdk inspect FacadeProbe --cards` 可取得同一份卡片模型。
 
 保存 Facade 文件与生成程序是两个独立操作。「编译」执行 SDK 生成及编译，之后重新读取 Gened 可看到新产物。也可在命令行直接读取磁盘模块：
 
