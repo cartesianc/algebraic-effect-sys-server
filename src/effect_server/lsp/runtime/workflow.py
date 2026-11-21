@@ -21,8 +21,33 @@ def ast_namespaces(root: Path):
             yield ".".join(parts)
 
 
+def source_digest(path: Path) -> str:
+    # 与 SDK 写入 sources 的算法一致：CRLF 换成 LF 后取 MD5，不随检出的换行方式变化。
+    return hashlib.md5(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def current_sources(root: Path, folder: Path) -> dict[str, str]:
+    """Digest every handwritten module of the namespace, keyed like report sources.
+
+    The page compares an optimized report's ``sources`` with this map, so a preview
+    taken before the latest edit is dropped without rerunning the SDK."""
+    generated = folder / "Generated"
+    return {
+        path.relative_to(root).as_posix(): source_digest(path)
+        for path in sorted(folder.rglob("*.hs"))
+        if path.is_file() and not path.is_relative_to(generated)
+    }
+
+
 def generated_workflow(root: Path, namespace: str) -> dict:
-    folder = root.joinpath("demo", *namespace.split("."))
+    folder = root.joinpath("demo", *namespace.split(".")).resolve()
+    if not folder.is_relative_to(root.resolve()):
+        raise ValueError("命名空间目录超出绑定的工作树。")
+    current = current_sources(root.resolve(), folder)
+    return {**report_state(root, folder, namespace), "current": current}
+
+
+def report_state(root: Path, folder: Path, namespace: str) -> dict:
     path = (folder / "Generated" / "Workflow.json").resolve()
     if not path.is_relative_to(root):
         raise ValueError("工作流报告超出绑定的工作树。")
@@ -36,7 +61,7 @@ def generated_workflow(root: Path, namespace: str) -> dict:
         if not source.is_relative_to(folder):
             raise ValueError("工作流源码超出命名空间目录。")
         try:
-            digest = hashlib.md5(source.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+            digest = source_digest(source)
         except FileNotFoundError:
             digest = None
         if digest != entry["md5"]:
