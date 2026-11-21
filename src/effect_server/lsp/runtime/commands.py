@@ -12,9 +12,21 @@ from pathlib import Path
 from anyio import CancelScope
 from fastapi import Request
 
+from ..analysis.prototype import read_prototype
 from ..framework import Framework
 from ..project.model import constructor_name
 from .snapshot import namespace_lock
+
+
+def generate_graph(namespace: str, folder: Path, framework: Framework) -> dict:
+    with namespace_lock(namespace):
+        graph = read_prototype(folder, namespace)
+        if graph is None:
+            framework.run("workflow", namespace)
+            graph = read_prototype(folder, namespace)
+            if graph is None:
+                raise ValueError("SDK 生成结束，但未找到 Generated/Prototype.hs。")
+        return graph
 
 
 def executable_target(root: Path, main: Path) -> str | None:

@@ -49,7 +49,8 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 | `GET /facade/source?file=Effects.hs` | 读取业务 Haskell 模块的原文、定义索引及语法诊断。 |
 | `PUT /facade/source?file=Effects.hs` | 以 JSON 字符串提交源码，`If-Match` 使用读取时的文件 SHA-256。冲突返回 409。 |
 | `GET /gened?file=Handlers.hs` | tree-sitter-haskell 解析磁盘上的 Generated 模块，返回原文、模块名、定义行范围、模块内同名引用及语法诊断。 |
-| `GET /plan` | SDK 从当前业务声明计算 `chains`、绑定与步骤。生成失败返回 422 和 SDK 诊断。此操作只读。 |
+| `GET /plan` | tree-sitter-haskell 读取 `Generated/Prototype.hs` 的 effect、方法图、选择分支和资产关系，结合可用的 `Generated/Handlers.hs` 显示实现。已有原型直接返回图，缺文件返回 JSON `null`，语法或结构错误返回 422。 |
+| `POST /plan` | 用户点击「生成图分析」时调用。持有命名空间锁期间，缺原型才运行已有的 `effect-codegen workflow Namespace`，再读取生成的 Haskell 文件。 |
 
 命令行运行 `poetry run python -m effect_server.lsp --root $framework --sdk $sdk inspect FacadeProbe --cards` 可取得同一份卡片模型。
 
@@ -75,7 +76,7 @@ FastAPI 的 `GET /api/v1/console/namespaces` 列出已发布的命名空间，`G
 
 工作流中的 `chain [...]` 对应快照节点 `{"kind": "Chain", ...}`，`children` 保留声明顺序。更新旧工作树的顺序组合名称后，重新构建 SDK 并发布相应命名空间的快照。
 
-使用 `feat/request-chains` 时，将 SDK、工作树和快照目录绑定在同一版本，并重新发布快照。Python 原样发布 v1 的 `chains`、`bindings[].before` 与 `raw`。工作台按 SDK 的父节点和生产分支绘图，缺少 `chains` 时提示当前快照没有 gen 剧本。普通 Context 由请求方驱动，单独执行上游句柄不会发布资产。普通读取缺少请求方时，注册写入接口返回 422，并保留 `Asset never requested` 诊断；持续资产的 requests 启动或加入会话，requires 读取已有会话，lifelong 的 streams 也可驱动交付。持续资产有 requires、缺少 requests 和 streams 时也会被拒绝。alternative 判定资产由选择入口驱动。[框架规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/f36bb4e/docs/CORE_DESIGN.md#request-production)
+使用 `feat/request-chains` 时，将 SDK、工作树和快照目录绑定在同一版本，并重新发布快照。Python 原样发布 v1 的 `chains`、`bindings[].before` 与 `raw`。Gen 审阅端通过 `/plan` 另行读取已生成的 Haskell 原型。普通 Context 由请求方驱动，单独执行上游句柄不会发布资产。普通读取缺少请求方时，注册写入接口返回 422，并保留 `Asset never requested` 诊断；持续资产的 requests 启动或加入会话，requires 读取已有会话，lifelong 的 streams 也可驱动交付。持续资产有 requires、缺少 requests 和 streams 时也会被拒绝。alternative 判定资产由选择入口驱动。[框架规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/f36bb4e/docs/CORE_DESIGN.md#request-production)
 
 从 Console 添加注册、编译或执行程序前，先按[绑定框架工作树](#framework-root)启动服务。
 

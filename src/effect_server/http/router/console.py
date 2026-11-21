@@ -7,12 +7,13 @@ from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from ...config import get_app_config
 from ...lsp.analysis.facade import facade
+from ...lsp.analysis.prototype import read_prototype
 from ...lsp.analysis.sources import namespace_folder, save_facade, source_document, source_namespaces
 from ...lsp.codegen.registration import add_registration
 from ...lsp.framework import Framework
 from ...lsp.project.model import constructor_name
-from ...lsp.runtime.commands import command_output
-from ...lsp.runtime.snapshot import RegistrationConflict, directory, stamp
+from ...lsp.runtime.commands import command_output, generate_graph
+from ...lsp.runtime.snapshot import RegistrationConflict, directory
 from ...lsp.runtime.workflow import AstLoadError, ast_namespaces, generated_workflow, optimize_workflow
 
 
@@ -120,8 +121,13 @@ def write_module(namespace: str, file: str, request: Request, source: str = Body
 
 @router.get("/namespaces/{namespace}/plan")
 def gen_plan(namespace: str, request: Request):
+    return workbench_call(read_prototype, bound_folder(namespace, request), namespace)
+
+
+@router.post("/namespaces/{namespace}/plan")
+def create_gen_plan(namespace: str, request: Request):
     framework = bound_framework(request, namespace, allow_ast=True)
-    return stamp(namespace, workbench_call(framework.read_json, "console", namespace))
+    return workbench_call(generate_graph, namespace, bound_folder(namespace, request), framework)
 
 
 @router.get("/namespaces/{namespace}/workflow")
