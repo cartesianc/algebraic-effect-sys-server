@@ -10,10 +10,16 @@ from pathlib import Path
 class Framework:
     executable: Path
     root: Path
+    source_dir: Path = Path("demo")
+
+    def command(self, *arguments: str):
+        directory = self.source_dir.as_posix()
+        prefix = ["--source-dir", directory] if directory != "demo" else []
+        return [str(self.executable.resolve()), *prefix, *arguments]
 
     def run(self, *arguments: str, source: str = "") -> bytes:
         result = subprocess.run(
-            [self.executable.resolve(), *arguments],
+            self.command(*arguments),
             cwd=self.root, input=source.encode("utf-8"), capture_output=True,
         )
         if result.returncode:

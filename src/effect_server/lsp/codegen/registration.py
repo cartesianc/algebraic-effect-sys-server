@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 from ..analysis.sources import modules, namespace_folder, revision as source_revision
 from ..analysis.read import read_namespace
 from ..framework import Framework
+from ..project.entries import IGNORED
 from ..project.model import TYPING_FIELDS, constructor_name, validate_effect
 from ..runtime.snapshot import RegistrationConflict, atomic_write, directory, namespace_lock, stamp, store
 from .effect import generate_effect
@@ -40,8 +41,8 @@ def add_registration(namespace: str, revision: str, document: dict, framework: F
     name = effect["name"]
     if not constructor_name(name) or name in {"Root", "None"}:
         raise ValueError("Effect 名称须为大写开头的标识符，Root 和 None 为保留名。")
-    relative = Path("demo", *namespace.split("."), "Effects.hs")
-    target = modules(namespace_folder(framework.root, namespace), False).get("Effects.hs")
+    relative = Path(framework.source_dir, *namespace.split("."), "Effects.hs")
+    target = modules(namespace_folder(framework.root, namespace, framework.source_dir), False).get("Effects.hs")
     if not target:
         raise ValueError("找不到可编辑的 Effects.hs。")
     with namespace_lock(namespace):
@@ -71,11 +72,12 @@ def add_registration(namespace: str, revision: str, document: dict, framework: F
         expression = generate_effect(document, framework)
         with TemporaryDirectory() as temp:
             stage = Path(temp)
-            for folder in ("sdk", "demo"):
-                shutil.copytree(framework.root / folder, stage / folder)
+            shutil.copytree(framework.root / "sdk", stage / "sdk")
+            shutil.copytree(framework.root / framework.source_dir, stage / framework.source_dir,
+                            dirs_exist_ok=True, ignore=shutil.ignore_patterns(".*", *sorted(IGNORED - {"Generated"})))
             candidate_file = stage / relative
             original = candidate_file.read_bytes()
-            reader = Framework(framework.executable, stage)
+            reader = Framework(framework.executable, stage, framework.source_dir)
             slot = reader.read_json("registration-slot", namespace)
             candidate = append_expression(original, slot, expression)
             candidate_file.write_bytes(candidate)

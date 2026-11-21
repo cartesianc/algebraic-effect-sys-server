@@ -14,6 +14,7 @@ from fastapi import Request
 
 from ..analysis.prototype import read_prototype
 from ..framework import Framework
+from ..project.entries import entry_for
 from ..project.model import constructor_name
 from .snapshot import namespace_lock
 
@@ -30,30 +31,47 @@ def generate_graph(namespace: str, folder: Path, framework: Framework) -> dict:
 
 
 def executable_target(root: Path, main: Path) -> str | None:
-    """Match the project's executable stanza to its business Main.hs."""
+    """Resolve main-is against the executable's source directories, including common stanzas."""
     for manifest in root.glob("*.cabal"):
-        target = None
+        stanzas = {}
+        fields = None
+        key = ""
         for raw in manifest.read_text(encoding="utf-8").splitlines():
             line = raw.partition("--")[0].rstrip()
             if not line:
                 continue
             if not line[0].isspace():
-                match = re.fullmatch(r"executable\s+([\w-]+)", line, re.I)
-                target = "exe:" + match[1] if match else None
-            elif target:
-                field, _, value = line.strip().partition(":")
-                if field.lower() == "main-is" and Path(value.strip().strip('"')) in (main, Path("demo") / main):
-                    return target
+                match = re.fullmatch(r"(common|executable)\s+([\w-]+)", line, re.I)
+                fields = stanzas.setdefault((match[1].lower(), match[2]), {}) if match else None
+                key = ""
+            elif fields is not None:
+                field, colon, value = line.strip().partition(":")
+                if colon:
+                    key = field.lower()
+                if key in {"main-is", "import", "hs-source-dirs"}:
+                    fields.setdefault(key, []).extend(t.strip('"') for t in re.findall(r'"[^"]*"|[^,\s]+', value if colon else field))
+        for (kind, name), fields in stanzas.items():
+            if kind != "executable":
+                continue
+            dirs = list(fields.get("hs-source-dirs", []))
+            pending, seen = list(fields.get("import", [])), set()
+            while pending:
+                common = pending.pop()
+                if common not in seen:
+                    seen.add(common)
+                    shared = stanzas.get(("common", common), {})
+                    dirs.extend(shared.get("hs-source-dirs", []))
+                    pending.extend(shared.get("import", []))
+            if any(Path(d) / file == main for file in fields.get("main-is", []) for d in dirs or ["."]):
+                return "exe:" + name
     return None
 
 
 async def steps(framework: Framework, ns: str, execute: bool):
     root = framework.root
-    main = Path(*ns.split("."), "Main.hs")
-    if not (root / "demo" / main).is_file():
-        raise ValueError(f"找不到 demo/{main.as_posix()}")
-    target = executable_target(root, main)
-    yield "生成", [str(framework.executable), "workflow", ns]
+    entry = await asyncio.to_thread(entry_for, root, ns)
+    target = executable_target(root, entry.main)
+    yield "生成", framework.command("workflow", ns)
     if target:
         yield "编译", ["cabal", "build", target]
         if execute:
@@ -67,9 +85,9 @@ async def steps(framework: Framework, ns: str, execute: bool):
         out = root / "dist-newstyle" / "effect-studio" / ns
         out.mkdir(parents=True, exist_ok=True)
         binary = out / ("program.exe" if os.name == "nt" else "program")
-        yield "编译", ["cabal", "exec", "--", "ghc", "--make", "-threaded", "-isdk", "-idemo",
-                       "-main-is", ns + ".Main", "-outputdir", str(out), "-o", str(binary),
-                       str(Path("demo") / main)]
+        yield "编译", ["cabal", "exec", "--", "ghc", "--make", "-threaded", "-isdk", "-i" + framework.source_dir.as_posix(),
+                       "-main-is", entry.main_module, "-outputdir", str(out), "-o", str(binary),
+                       str(entry.main)]
     if execute:
         yield "执行", [str(binary)]
 

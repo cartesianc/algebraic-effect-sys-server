@@ -100,7 +100,7 @@ def card_graph(rows: list, effects: bytes, handlers: bytes) -> dict:
 
 
 def facade(framework: Framework, namespace: str) -> dict:
-    files = modules(namespace_folder(framework.root, namespace), False)
+    files = modules(namespace_folder(framework.root, namespace, framework.source_dir), False)
     base = {"namespace": namespace, "files": list(files), "editable": False, "registrations": []}
     if "Effects.hs" not in files:
         return {**base, "error": "缺少 Effects.hs"}

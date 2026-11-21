@@ -9,16 +9,8 @@ from pathlib import Path
 from anyio import CancelScope
 
 from ..framework import Framework
-from ..project.model import constructor_name
+from ..analysis.sources import namespace_folder
 from .commands import start_process, stop_process
-
-
-def ast_namespaces(root: Path):
-    demo = root / "demo"
-    for ast in demo.rglob("AST.hs"):
-        parts = ast.parent.relative_to(demo).parts
-        if parts and all(map(constructor_name, parts)) and ast.resolve().is_relative_to(demo) and ast.is_file():
-            yield ".".join(parts)
 
 
 def source_digest(path: Path) -> str:
@@ -39,8 +31,8 @@ def current_sources(root: Path, folder: Path) -> dict[str, str]:
     }
 
 
-def generated_workflow(root: Path, namespace: str) -> dict:
-    folder = root.joinpath("demo", *namespace.split(".")).resolve()
+def generated_workflow(root: Path, namespace: str, source_dir: Path | None = None) -> dict:
+    folder = namespace_folder(root, namespace, source_dir)
     if not folder.is_relative_to(root.resolve()):
         raise ValueError("命名空间目录超出绑定的工作树。")
     current = current_sources(root.resolve(), folder)
@@ -74,7 +66,7 @@ class AstLoadError(ValueError):
 
 
 async def optimize_workflow(framework: Framework, namespace: str) -> dict:
-    process = start_process(framework, [framework.executable, "ast", namespace], stderr=subprocess.PIPE)
+    process = start_process(framework, framework.command("ast", namespace), stderr=subprocess.PIPE)
     output = asyncio.create_task(asyncio.to_thread(process.communicate))
     try:
         stdout, stderr = await asyncio.wait_for(asyncio.shield(output), timeout=120)

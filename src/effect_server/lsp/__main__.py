@@ -10,6 +10,7 @@ from .analysis.read import read_effect, read_namespace
 from .analysis.sources import namespace_folder, source_document
 from .codegen.effect import generate_effect
 from .framework import Framework
+from .project.entries import entry_for
 from .runtime.snapshot import publish
 
 
@@ -41,8 +42,15 @@ def main():
     args = parser.parse_args()
     if args.command != "gened" and not args.sdk:
         parser.error("--sdk is required for SDK commands")
-    framework = Framework(args.sdk, args.root.resolve()) if args.sdk else None
     try:
+        root = args.root.resolve()
+        if args.command == "gened":
+            folder = namespace_folder(root, args.namespace)
+            result = source_document(folder, True, args.file)
+            sys.stdout.buffer.write(json.dumps(result, ensure_ascii=False, indent=2).encode("utf-8") + b"\n")
+            return
+        framework = (Framework(args.sdk, root, entry_for(root, args.namespace).source_dir)
+                     if args.command in {"snapshot", "inspect"} else Framework(args.sdk, root))
         if args.command == "snapshot":
             print(publish(args.namespace, framework))
             return
@@ -51,10 +59,7 @@ def main():
             source = generate_effect(model, framework)
             sys.stdout.buffer.write((source + "\n").encode("utf-8"))
             return
-        if args.command == "gened":
-            folder = namespace_folder(args.root.resolve(), args.namespace)
-            result = source_document(folder, True, args.file)
-        elif args.command == "read":
+        if args.command == "read":
             result = read_effect(sys.stdin.buffer.read().decode("utf-8-sig"), framework)
         elif args.cards:
             result = facade(framework, args.namespace)

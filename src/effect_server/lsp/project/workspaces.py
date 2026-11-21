@@ -10,6 +10,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 
 from .scaffold import scaffold_project
+from .entries import entries
 from ..runtime.snapshot import RegistrationConflict, console_home, namespace_lock
 
 
@@ -30,7 +31,8 @@ def project_at(root: Path, executable: Path | None, name: str = "") -> Project:
 
 
 def describe(project: Project):
-    return {**asdict(project), "sdkReady": Path(project.executable).is_file()}
+    template = os.getenv("EFFECT_SDK_TEMPLATE") if project.root == os.getenv("EFFECT_FRAMEWORK_ROOT") else None
+    return {**asdict(project), "sdkReady": Path(project.executable).is_file(), "sdkTemplate": template or project.root}
 
 
 def startup_project():
@@ -111,8 +113,10 @@ def persist(project: Project):
 
 def import_project(root: str, name: str, executable: str | None):
     folder = absolute(root)
-    if not (folder / "sdk/Framework/SDK.hs").is_file() or not (folder / "demo").is_dir():
-        raise ValueError("项目目录应包含 sdk/Framework/SDK.hs 和 demo/。")
+    if not (folder / "sdk/Framework/SDK.hs").is_file():
+        raise ValueError("项目根目录中找不到 sdk/Framework/SDK.hs。")
+    if not entries(folder):
+        raise ValueError("无法解析工作流 main 引用的 interpreter、ast 和 effects。请核对导入；经过重导出时需由 HLS 加载项目。")
     return persist(project_at(folder, sdk_executable(folder, executable, allow_unbuilt=True), name))
 
 
@@ -131,7 +135,7 @@ def build_sdk(project: Project):
         return persist(project_at(root, sdk_executable(root, None), project.name))
 
 
-def new_project(root: str, name: str, namespace: str, sdk_root: str, executable: str | None):
+def new_project(root: str, name: str, namespace: str, sdk_root: str, executable: str | None, source_dir: str = "src"):
     target, template = absolute(root), absolute(sdk_root)
     if target.exists():
         raise RegistrationConflict("新项目需要一个尚不存在的目录；已有项目请使用导入。")
@@ -141,7 +145,7 @@ def new_project(root: str, name: str, namespace: str, sdk_root: str, executable:
     with TemporaryDirectory(dir=target.parent) as staging:
         folder = Path(staging) / "project"
         folder.mkdir()
-        scaffold_project(folder, template, namespace)
+        scaffold_project(folder, template, namespace, source_dir)
         # A fresh Cabal checkout needs its local package database before GHCi
         # can load the first namespace. A prebuilt SDK only needs configuration.
         configure_sdk(folder, build=exe is None)

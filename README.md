@@ -48,12 +48,15 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 | 请求 | 请求体或结果 |
 | --- | --- |
 | `GET /projects` | 返回项目 ID、显示名、根目录、工具路径及 `sdkReady`。 |
-| `POST /projects/import` | `{"root":"D:/work/existing","name":"业务系统"}`。登记包含 `sdk/Framework/SDK.hs` 和 `demo/` 的目录。可传 `executable` 指定已构建的 effect-codegen。再次导入同一路径可更新名称或工具。 |
-| `POST /projects` | `{"root":"D:/work/orders","name":"订单","sdk_root":"D:/sdk","namespace":"Orders.App"}`。复制所选版本的 SDK 源码并初始化 Cabal 项目和首个命名空间。可传 `executable` 复用已有工具。 |
+| `POST /browse` | `{"kind":"directory","initial":"D:/work"}` 打开服务端桌面的系统目录选择器。选择工具时使用 `executable`，取消返回 `{"path":null}`。 |
+| `POST /projects/import` | `{"root":"D:/work/existing","name":"业务系统"}`。项目保留 `sdk/Framework/SDK.hs`，工作台根据调用 `interpreter ast effects` 的入口及模块导入识别命名空间和源码目录。可传 `executable` 指定生成器。 |
+| `POST /projects` | `{"root":"D:/work/orders","name":"订单","sdk_root":"D:/sdk","namespace":"Orders.App","source_dir":"src"}`。初始化 SDK、Cabal 项目及首个命名空间。源码目录相对于项目根，默认 `src`。自定义目录需要支持 `--source-dir` 的 effect-codegen。 |
 | `POST /projects/{id}/sdk/build` | 在该项目内执行 `cabal build exe:effect-codegen` 并登记本地工具。 |
-| `POST /projects/{id}/namespaces` | `{"namespace":"Payments"}`。创建可编辑的 `Types.hs`、`Effects.hs`、`AST.hs`、`Handlers.hs`、`Main.hs`。已有目录返回 409。 |
+| `POST /projects/{id}/namespaces` | `{"namespace":"Payments"}`。沿用已有入口的源码目录。存在多个目录时指定 `source_dir`。创建可编辑的 `Types.hs`、`Effects.hs`、`AST.hs`、`Handlers.hs`、`Main.hs`。已有目录返回 409。 |
 
 图、源码、注册和编译运行均可通过 `/projects/{id}/namespaces/…` 访问。项目中的草稿、编译请求和工作台分析快照按项目区分。模板提供一个 `Start` 节点及 handler；首次生成时由 SDK 写入标准 Generated 模块。新项目的首个命名空间有 Cabal executable，后加的命名空间可由工作台通过现有独立程序构建入口运行。
+
+入口可以单独放在 `app/Main.hs`。直接导入或使用模块别名时，工作台从语法树定位声明，首次生成前也可打开。经过重导出时，工作台通过项目的 HLS cradle 查询 `interpreter`、`ast` 和 `effects` 的定义位置。服务从 PATH 查找 `haskell-language-server-wrapper`，也可通过 `EFFECT_HLS` 指定可执行文件。HLS 需要能加载相关模块，查询结果随业务源码和 cradle 配置的变更失效。
 
 ## Facade 编辑与 Gened 审阅
 

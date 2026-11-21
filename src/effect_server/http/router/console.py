@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 from typing import Literal
@@ -9,15 +10,17 @@ from pydantic import BaseModel
 from ...config import get_app_config
 from ...lsp.analysis.facade import facade
 from ...lsp.analysis.prototype import read_prototype
-from ...lsp.analysis.sources import namespace_folder, save_facade, source_document, source_namespaces
+from ...lsp.analysis.sources import namespace_folder, save_facade, source_document
 from ...lsp.codegen.registration import add_registration
 from ...lsp.framework import Framework
+from ...lsp.project.entries import entries, entry_for
 from ...lsp.project.model import constructor_name
+from ...lsp.project.picker import browse
 from ...lsp.project.scaffold import create_namespace
 from ...lsp.project.workspaces import build_sdk, import_project, lookup, new_project, projects, startup_project
 from ...lsp.runtime.commands import command_output, generate_graph
 from ...lsp.runtime.snapshot import RegistrationConflict, console_home, directory, project_directory
-from ...lsp.runtime.workflow import AstLoadError, ast_namespaces, generated_workflow, optimize_workflow
+from ...lsp.runtime.workflow import AstLoadError, generated_workflow, optimize_workflow
 
 
 def check_browser_origin(request: Request) -> None:
@@ -49,6 +52,7 @@ class ImportProject(BaseModel):
 
 
 class NewProject(ImportProject):
+    source_dir: str = "src"
     sdk_root: str
     namespace: str
 
@@ -63,9 +67,14 @@ def register_project(body: ImportProject):
     return workbench_call(import_project, body.root, body.name, body.executable)
 
 
+@router.post("/browse", dependencies=[Depends(require_origin)])
+def browse_local(kind: Literal["directory", "executable"] = Body(), initial: str = Body("")):
+    return workbench_call(browse, kind, initial)
+
+
 @router.post("/projects", status_code=201, dependencies=[Depends(require_origin)])
 def initialize_project(body: NewProject):
-    return workbench_call(new_project, body.root, body.name, body.namespace, body.sdk_root, body.executable)
+    return workbench_call(new_project, body.root, body.name, body.namespace, body.sdk_root, body.executable, body.source_dir)
 
 
 async def bind_project(project_id: str, request: Request):
@@ -100,7 +109,7 @@ def namespaces(request: Request, workflow: bool = False) -> list[str]:
         require_origin(request)
         if root := project_root(request):
             workspace = Path(root).resolve()
-            names = set(ast_namespaces(workspace)) | set(source_namespaces(workspace))
+            names = set(workbench_call(entries, workspace))
     return sorted(names)
 
 
@@ -120,7 +129,7 @@ def published(namespace: str) -> bool:
             and (directory() / (namespace + ".json")).is_file())
 
 
-def bound_framework(request: Request, namespace: str, *, allow_ast: bool = False) -> Framework:
+def bound_framework(request: Request, namespace: str) -> Framework:
     require_origin(request)
     if not all(map(constructor_name, namespace.split("."))):
         raise HTTPException(404, "无效的命名空间。")
@@ -131,13 +140,9 @@ def bound_framework(request: Request, namespace: str, *, allow_ast: bool = False
         raise HTTPException(503, "该项目尚无可用的 effect-codegen，请在项目面板构建 SDK 或导入时指定工具。")
     if not root or not sdk:
         raise HTTPException(503, "后端尚未配置 EFFECT_FRAMEWORK_ROOT 和 EFFECT_CODEGEN。")
-    framework = Framework(Path(sdk).resolve(), Path(root).resolve())
-    if not published(namespace):
-        ast = framework.root.joinpath("demo", *namespace.split("."), "AST.hs").resolve()
-        if not (allow_ast and ast.is_relative_to(framework.root / "demo") and
-                any((ast.parent / file).is_file() for file in ("AST.hs", "Effects.hs", "Generated/Handlers.hs"))):
-            raise HTTPException(404, "找不到工作流。" if allow_ast else "该命名空间尚未发布。")
-    return framework
+    folder = Path(root).resolve()
+    entry = workbench_call(entry_for, folder, namespace)
+    return Framework(Path(sdk).resolve(), folder, entry.source_dir)
 
 
 def workbench_call(fn, *args):
@@ -155,7 +160,7 @@ def workbench_call(fn, *args):
 
 @workspace.get("/namespaces/{namespace}/facade")
 def declarations(namespace: str, request: Request):
-    return workbench_call(facade, bound_framework(request, namespace, allow_ast=True), namespace)
+    return workbench_call(facade, bound_framework(request, namespace), namespace)
 
 
 def bound_folder(namespace: str, request: Request) -> Path:
@@ -187,22 +192,22 @@ def gen_plan(namespace: str, request: Request):
 
 @workspace.post("/namespaces/{namespace}/plan")
 def create_gen_plan(namespace: str, request: Request):
-    framework = bound_framework(request, namespace, allow_ast=True)
+    framework = bound_framework(request, namespace)
     return workbench_call(generate_graph, namespace, bound_folder(namespace, request), framework)
 
 
 @workspace.get("/namespaces/{namespace}/workflow")
 def workflow(namespace: str, request: Request):
-    framework = bound_framework(request, namespace, allow_ast=True)
+    framework = bound_framework(request, namespace)
     try:
-        return generated_workflow(framework.root, namespace)
+        return generated_workflow(framework.root, namespace, framework.source_dir)
     except (ValueError, KeyError, TypeError, OSError) as error:
         raise HTTPException(500, f"无法读取工作流报告：{error}") from error
 
 
 @workspace.post("/namespaces/{namespace}/workflow/optimize")
 async def optimize(namespace: str, request: Request):
-    framework = bound_framework(request, namespace, allow_ast=True)
+    framework = await asyncio.to_thread(bound_framework, request, namespace)
     try:
         return {"report": await optimize_workflow(framework, namespace)}
     except AstLoadError as error:
@@ -215,7 +220,7 @@ async def optimize(namespace: str, request: Request):
 
 @workspace.post("/namespaces/{namespace}/commands/{action}")
 async def command(namespace: str, action: Literal["compile", "run"], request: Request):
-    framework = bound_framework(request, namespace, allow_ast=True)
+    framework = await asyncio.to_thread(bound_framework, request, namespace)
     return StreamingResponse(command_output(request, framework, namespace, action == "run"),
                              media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -223,7 +228,7 @@ async def command(namespace: str, action: Literal["compile", "run"], request: Re
 
 @workspace.post("/namespaces/{namespace}/registrations", status_code=201)
 def create_registration(namespace: str, document: dict, request: Request, if_match: str = Header()):
-    framework = bound_framework(request, namespace, allow_ast=True)
+    framework = bound_framework(request, namespace)
     try:
         return add_registration(namespace, if_match.strip('"'), document, framework)
     except RegistrationConflict as error:
@@ -233,11 +238,11 @@ def create_registration(namespace: str, document: dict, request: Request, if_mat
 
 
 @workspace.post("/namespaces", status_code=201)
-def initialize_namespace(request: Request, namespace: str = Body(embed=True)):
+def initialize_namespace(request: Request, namespace: str = Body(), source_dir: str | None = Body(None)):
     require_origin(request)
     if not (root := project_root(request)):
         raise HTTPException(503, "请先导入或新建项目。")
-    return workbench_call(create_namespace, Path(root).resolve(), namespace)
+    return workbench_call(create_namespace, Path(root).resolve(), namespace, source_dir)
 
 
 router.include_router(workspace, prefix="/projects/{project_id}", dependencies=[Depends(bind_project)])

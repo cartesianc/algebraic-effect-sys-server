@@ -3,32 +3,21 @@
 from hashlib import sha256
 from pathlib import Path
 
-from tree_sitter import Language, Parser
-import tree_sitter_haskell
+from tree_sitter import Parser
 
+from ..project.entries import HASKELL, entry_for
 from ..project.model import constructor_name
 from ..runtime.snapshot import RegistrationConflict, atomic_write, namespace_lock
 
 
-HASKELL = Language(tree_sitter_haskell.language())
-
-
-def namespace_folder(root: Path, namespace: str) -> Path:
+def namespace_folder(root: Path, namespace: str, source_dir: Path | None = None) -> Path:
     if not all(map(constructor_name, namespace.split("."))):
         raise ValueError("无效的命名空间。")
-    folder = root.joinpath("demo", *namespace.split("."))
+    base = source_dir if source_dir is not None else entry_for(root, namespace).source_dir
+    folder = root.joinpath(base, *namespace.split("."))
     if folder.resolve() != folder or not folder.is_dir():
         raise FileNotFoundError(namespace)
     return folder
-
-
-def source_namespaces(root: Path):
-    base = root / "demo"
-    for path in base.rglob("Effects.hs"):
-        folder = path.parent.parent if path.parent.name == "Generated" else path.parent
-        parts = folder.relative_to(base).parts
-        if parts and all(map(constructor_name, parts)) and path.resolve() == path and path.is_file():
-            yield ".".join(parts)
 
 
 def modules(folder: Path, generated: bool) -> dict[str, Path]:

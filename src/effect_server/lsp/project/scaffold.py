@@ -1,5 +1,6 @@
 """Create a runnable SDK namespace, or a new Cabal workspace with the SDK sources."""
 
+import json
 import os
 from pathlib import Path
 import re
@@ -7,6 +8,7 @@ import shutil
 from tempfile import TemporaryDirectory
 
 from .model import constructor_name
+from .entries import business_dir, entries
 from ..runtime.snapshot import RegistrationConflict
 
 
@@ -72,8 +74,16 @@ main = interpreter ast effects
         (folder / filename).write_text(source, encoding="utf-8")
 
 
-def create_namespace(root: Path, namespace: str):
-    dest = root.joinpath("demo", *namespace_parts(namespace))
+def create_namespace(root: Path, namespace: str, source_dir: str | None = None):
+    found = entries(root)
+    if namespace in found:
+        raise RegistrationConflict("命名空间已存在。")
+    if source_dir is None:
+        roots = {entry.source_dir for entry in found.values()}
+        if len(roots) > 1:
+            raise ValueError("项目有多个业务源码目录，请指定新命名空间的源码目录。")
+        source_dir = next(iter(roots), Path("src")).as_posix()
+    dest = root.joinpath(business_dir(root, source_dir), *namespace_parts(namespace))
     if dest.resolve() != dest:
         raise ValueError("命名空间路径超出项目目录。")
     if dest.exists():
@@ -88,7 +98,7 @@ def create_namespace(root: Path, namespace: str):
     return {"namespace": namespace}
 
 
-def scaffold_project(stage: Path, sdk_root: Path, namespace: str):
+def scaffold_project(stage: Path, sdk_root: Path, namespace: str, source_dir: str):
     """Keep the SDK tool and runtime stanza from the selected version. Omit demo applications."""
     parts = namespace_parts(namespace)
     manifests = []
@@ -101,6 +111,11 @@ def scaffold_project(stage: Path, sdk_root: Path, namespace: str):
     if len(manifests) != 1 or not (sdk_root / "sdk/Framework/SDK.hs").is_file():
         raise ValueError("SDK 模板需要 sdk/Framework/SDK.hs 及声明 runtime-program 和 effect-codegen 的 Cabal 文件。")
     runtime, tool = manifests[0]
+    source = business_dir(stage, source_dir).as_posix()
+    runtime, count = re.subn(r"(?mi)^([ \t]*hs-source-dirs\s*:)[^\n]*$",
+                             lambda m: m[1] + " " + json.dumps(source, ensure_ascii=False) + ", sdk", runtime)
+    if count != 1:
+        raise ValueError("SDK 的 runtime-program 须声明一个 hs-source-dirs 字段。")
     shutil.copytree(sdk_root / "sdk", stage / "sdk", ignore=shutil.ignore_patterns("*.hi", "*.o", "*.dyn_hi", "*.dyn_o"))
     if (sdk_root / "LICENSE").is_file():
         shutil.copyfile(sdk_root / "LICENSE", stage / "LICENSE")
@@ -113,4 +128,4 @@ def scaffold_project(stage: Path, sdk_root: Path, namespace: str):
         + "  other-modules:\n" + "".join(f"      {namespace}.{module}\n" for module in
               ["AST", "Effects", "Types", "Generated.Program", "Generated.Handlers", "Generated.Prototype", "Generated.Effects"]),
         encoding="utf-8")
-    create_namespace(stage, namespace)
+    create_namespace(stage, namespace, source)
