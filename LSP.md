@@ -17,7 +17,9 @@
 
 ## 代码长什么样
 
-Console v1 的每条绑定通过 `before` 按序给出普通资产生产入口（requests）、直接前驱（input）和持续会话请求（session），通过 `raw` 给出 rawinput 或 rawstream 的来源。步骤带有目标 method 和所属 effect。session 的 method 为空串，effect 指向持续 Context。前端跟随方法绑定展开，遇到会话边时在该 Context 处停止。旧快照缺少 before 时才从注册推导。以 Crawler 为例，`PrintPage` 请求 `StartPageSummary`，生产链包含 `FetchPage → KeepPageBody → ExtractPage`。`FetchPage` 请求 `StartURL`，其 Input `CrawlSession` 又请求 `CrawlSessionInfo`。图上的共用卡片表示同一份注册，每个请求方执行时各自发起请求。图上实线既可表示入口前驱，也可表示 raw 读取的上游。普通 Context 或 Pure 通过方法体中的 `rawinput` 拉取上游，在没有同次输出可回放时，调用次数取决于方法体实际读取几次。[SDK 的 Console 导出](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/f36bb4e/sdk/Framework/Gen/Console.hs)
+编辑端通过 `/facade` 调 SDK 的 `read-effects` 解析手写声明。分析端默认通过 `/gened` 在磁盘的 Generated 目录读取 Haskell，使用 tree-sitter-haskell 建立模块、定义与同名引用索引。这里可以审阅上一次生成的代码，即使当前声明已经变更、当前 gen 失败，或没有发布快照。两端的接口与写入版本规则见 [启动与接口说明](README.md)。
+
+当前声明的 gen 剧本单独通过 `/plan` 取得。新版 SDK 的 `chains.parents` 描述 Excu 与 Scoped 的消费关系，`branches` 描述锚点旁的生产步骤、资产及接收方。Crawler 的 `PrintPage` 在声明图中以 Root 为 Input，requests 和 requires 指向 StartPageSummary。在剧本图中，消费路径为 CrawlSession → FetchPage → PrintPage，KeepPageBody → ExtractPage → StartPageSummary 是 FetchPage 的侧枝。方法步骤跟随绑定的 `before` 与 `raw`，按同次调用内的 effect 去重，持续资产显示会话交付。缺少 `chains` 时，界面显示缺少 gen 剧本。[SDK 的消费链规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/436fd72/docs/CORE_DESIGN.md#consumer-chain)
 
 普通 `requires` 读取已发布的值。若没有任何注册请求该契约，SDK 会报告 `Asset never requested`；成功生成还要满足既有的 AST 可达性等检查。alternative 的判定 Context 由 selector 尝试解析。对持续资产，requests 启动或加入会话，把当前一条固定给本次调用；lifelong 末端的 streams 订阅也会驱动会话。requires 只读已有会话。只有 requires、缺少请求方和订阅方时，SDK 同样报告 `Asset never requested`。单独执行普通资产的上游句柄不会自动发布它。注册接口以 422 返回 SDK 诊断原文。切换工作树时重新发布 Console 快照，JSON 仍为 v1。
 

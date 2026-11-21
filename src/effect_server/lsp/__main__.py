@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 from .analysis.read import read_effect, read_namespace
+from .analysis.sources import namespace_folder, source_document
 from .codegen.effect import generate_effect
 from .framework import Framework
 from .runtime.snapshot import publish
@@ -22,7 +23,7 @@ def unique_fields(pairs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sdk", required=True, type=Path, help="built effect-codegen executable")
+    parser.add_argument("--sdk", type=Path, help="built effect-codegen executable (SDK commands)")
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="trusted framework checkout")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("read", help="read one EffectSpec expression from UTF-8 stdin")
@@ -31,8 +32,13 @@ def main():
     inspect.add_argument("namespace")
     inspect.add_argument("--name", help="select a registration by its exact effect name")
     commands.add_parser("snapshot", help="publish the console graph and workflow").add_argument("namespace")
+    review = commands.add_parser("gened", help="inspect an on-disk Generated Haskell module")
+    review.add_argument("namespace")
+    review.add_argument("--file", help="module path relative to Generated")
     args = parser.parse_args()
-    framework = Framework(args.sdk, args.root)
+    if args.command != "gened" and not args.sdk:
+        parser.error("--sdk is required for SDK commands")
+    framework = Framework(args.sdk, args.root) if args.sdk else None
     try:
         if args.command == "snapshot":
             print(publish(args.namespace, framework))
@@ -42,7 +48,10 @@ def main():
             source = generate_effect(model, framework)
             sys.stdout.buffer.write((source + "\n").encode("utf-8"))
             return
-        if args.command == "read":
+        if args.command == "gened":
+            folder = namespace_folder(args.root.resolve(), args.namespace)
+            result = source_document(folder, True, args.file)
+        elif args.command == "read":
             result = read_effect(sys.stdin.buffer.read().decode("utf-8-sig"), framework)
         else:
             result = read_namespace(args.namespace, framework)

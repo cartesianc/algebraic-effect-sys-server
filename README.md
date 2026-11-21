@@ -39,12 +39,23 @@ $env:EFFECT_CODEGEN = $sdk
 poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 ```
 
-使用时注意以下几点：
+## Facade 编辑与 Gened 审阅
 
-- **命名空间的位置**：命名空间位于工作树的 `demo/<命名空间>/`，例如 `demo/LinesDemo/AST.hs`。点号分隔的命名空间对应子目录。Workflow 视图列出 `demo/` 下所有含 `AST.hs` 的目录；Console 视图只列出已发布快照的命名空间。
-- **SDK 要与工作树一致**：`EFFECT_CODEGEN` 须与工作树同一版本。其他分支构建的 SDK 可能缺少 `ast`、`console` 等命令，或者生成格式不同。切换工作树或分支后，重新构建 SDK 并重启服务。
-- **快照来源**：快照来自发布命令的 `--root`，服务不核对它是否就是 `EFFECT_FRAMEWORK_ROOT`。两者应指向同一工作树，否则 Console 显示的是一个工作树，编译和执行却作用于另一个。
-- **前提条件**：编译、执行和添加注册要求该命名空间已有快照；Workflow 报告与 AST 优化只要求 `AST.hs` 存在。
+接口前缀为 `/api/v1/console/namespaces/{namespace}`。工作树请求需要工作台的 Origin。绑定的框架和本地构建的 SDK 应当来自同一检出。
+
+| 入口 | 数据来源与用途 |
+| --- | --- |
+| `GET /facade` | SDK 的 `read-effects` 解析当前手写注册，返回可编辑性、源码范围及声明版本。 |
+| `GET /facade/source?file=Effects.hs` | 列出并读取业务 Haskell 模块。 |
+| `PUT /facade/source?file=Effects.hs` | 以 JSON 字符串提交源码，`If-Match` 使用读取时的文件 SHA-256。冲突返回 409。 |
+| `GET /gened?file=Handlers.hs` | tree-sitter-haskell 解析磁盘上的 Generated 模块，返回原文、模块名、定义行范围、模块内同名引用及语法诊断。 |
+| `GET /plan` | SDK 从当前业务声明计算 `chains`、绑定与步骤。生成失败返回 422 和 SDK 诊断。此操作只读。 |
+
+保存 Facade 文件与生成程序是两个独立操作。「编译」执行 SDK 生成及编译，之后重新读取 Gened 可看到新产物。也可在命令行直接读取磁盘模块：
+
+```powershell
+poetry run python -m effect_server.lsp --root $framework gened Crawler --file Handlers.hs
+```
 
 ## 发布分析面板快照
 
@@ -58,15 +69,15 @@ SDK 的 `console Namespace` 复用组合分析，从同一个 Prototype 导出�
 
 FastAPI 的 `GET /api/v1/console/namespaces` 列出已发布的命名空间，`GET /api/v1/console/namespaces/{namespace}` 返回快照及分析时间。分析由本地发布命令触发。
 
-Workflow 用 `GET /api/v1/console/namespaces?workflow=true` 同时列出绑定工作树中含 `AST.hs` 的命名空间。`GET …/{namespace}/workflow` 返回生成报告的状态，并在 `current` 中给出命名空间内各手写模块当前的 MD5（CRLF 先换成 LF），网页据此丢弃源码改动前的优化预览；`POST …/{namespace}/workflow/optimize` 运行只读 AST 分析，源码加载失败时以 422 返回 GHC 文本。这些工作树请求使用与编译相同的 Origin 校验。
+工作台用 `GET /api/v1/console/namespaces?workflow=true` 发现绑定工作树中有 AST、Effects 声明或生成契约的命名空间。`GET …/{namespace}/workflow` 返回生成报告的状态，并在 `current` 中给出命名空间内各手写模块当前的 MD5（CRLF 先换成 LF），网页据此丢弃源码改动前的优化预览；`POST …/{namespace}/workflow/optimize` 运行只读 AST 分析，源码加载失败时以 422 返回 GHC 文本。这些工作树请求使用与编译相同的 Origin 校验。
 
 工作流中的 `chain [...]` 对应快照节点 `{"kind": "Chain", ...}`，`children` 保留声明顺序。更新旧工作树的顺序组合名称后，重新构建 SDK 并发布相应命名空间的快照。
 
-使用 `feat/request-chains` 时，将 SDK、工作树和快照目录绑定在同一版本，并重新发布快照。Python 原样发布 v1 的 `bindings[].before` 与 `raw`，工作台据此展开消费链。旧快照缺少入口步骤时，工作台沿注册的 Input 和 requests 展开。普通 Context 由请求方驱动，单独执行上游句柄不会发布资产。普通读取缺少请求方时，注册写入接口返回 422，并保留 `Asset never requested` 诊断；持续资产的 requests 启动或加入会话，requires 读取已有会话，lifelong 的 streams 也可驱动交付。持续资产有 requires、缺少 requests 和 streams 时也会被拒绝。alternative 判定资产由选择入口驱动。[框架规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/f36bb4e/docs/CORE_DESIGN.md#request-production)
+使用 `feat/request-chains` 时，将 SDK、工作树和快照目录绑定在同一版本，并重新发布快照。Python 原样发布 v1 的 `chains`、`bindings[].before` 与 `raw`。工作台按 SDK 的父节点和生产分支绘图，缺少 `chains` 时提示当前快照没有 gen 剧本。普通 Context 由请求方驱动，单独执行上游句柄不会发布资产。普通读取缺少请求方时，注册写入接口返回 422，并保留 `Asset never requested` 诊断；持续资产的 requests 启动或加入会话，requires 读取已有会话，lifelong 的 streams 也可驱动交付。持续资产有 requires、缺少 requests 和 streams 时也会被拒绝。alternative 判定资产由选择入口驱动。[框架规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/f36bb4e/docs/CORE_DESIGN.md#request-production)
 
 从 Console 添加注册、编译或执行程序前，先按[绑定框架工作树](#framework-root)启动服务。
 
-`POST /api/v1/console/namespaces/{namespace}/registrations` 接收 beforegen v1 的注册 JSON。`If-Match` 携带当前快照的 `analyzedAt`，浏览器从已允许的 Origin 提交请求。服务定位 `effects` 显式列表的结束位置，在临时副本插入注册并运行 SDK 组合分析。成功后写入业务 `Effects.hs` 并返回新快照。重名或快照冲突返回 409，SDK 拒绝时返回 422。
+`POST /api/v1/console/namespaces/{namespace}/registrations` 接收 beforegen v1 的注册 JSON。`If-Match` 携带 `/facade` 的 `revision`（旧客户端可使用已发布快照的 `analyzedAt`），浏览器从已允许的 Origin 提交请求。服务定位 `effects` 显式列表的结束位置，在临时副本插入注册并运行 SDK 组合分析。成功后写入业务 `Effects.hs` 并返回新快照。重名或快照冲突返回 409，SDK 拒绝时返回 422。
 
 浏览器默认只允许 `http://127.0.0.1:3000` 和 `http://localhost:3000` 这两个源。更换网页地址时设置 `EFFECT_CONSOLE_ORIGINS`。
 

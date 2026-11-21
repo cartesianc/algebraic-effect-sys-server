@@ -2,15 +2,16 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 
 from ...config import get_app_config
+from ...lsp.analysis.sources import facade, namespace_folder, save_facade, source_document, source_namespaces
 from ...lsp.codegen.registration import add_registration
 from ...lsp.framework import Framework
 from ...lsp.project.model import constructor_name
 from ...lsp.runtime.commands import command_output
-from ...lsp.runtime.snapshot import RegistrationConflict, directory
+from ...lsp.runtime.snapshot import RegistrationConflict, directory, stamp
 from ...lsp.runtime.workflow import AstLoadError, ast_namespaces, generated_workflow, optimize_workflow
 
 
@@ -41,7 +42,8 @@ def namespaces(request: Request, workflow: bool = False) -> list[str]:
     if workflow:
         require_origin(request)
         if root := os.getenv("EFFECT_FRAMEWORK_ROOT"):
-            names.update(ast_namespaces(Path(root).resolve()))
+            workspace = Path(root).resolve()
+            names = set(ast_namespaces(workspace)) | set(source_namespaces(workspace))
     return sorted(names)
 
 
@@ -71,9 +73,54 @@ def bound_framework(request: Request, namespace: str, *, allow_ast: bool = False
     framework = Framework(Path(sdk).resolve(), Path(root).resolve())
     if not published(namespace):
         ast = framework.root.joinpath("demo", *namespace.split("."), "AST.hs").resolve()
-        if not (allow_ast and ast.is_relative_to(framework.root / "demo") and ast.is_file()):
+        if not (allow_ast and ast.is_relative_to(framework.root / "demo") and
+                any((ast.parent / file).is_file() for file in ("AST.hs", "Effects.hs", "Generated/Handlers.hs"))):
             raise HTTPException(404, "找不到工作流。" if allow_ast else "该命名空间尚未发布。")
     return framework
+
+
+def workbench_call(fn, *args):
+    try:
+        return fn(*args)
+    except FileNotFoundError as error:
+        raise HTTPException(404, "找不到绑定的文件或工具。") from error
+    except RegistrationConflict as error:
+        raise HTTPException(409, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@router.get("/namespaces/{namespace}/facade")
+def declarations(namespace: str, request: Request):
+    return workbench_call(facade, bound_framework(request, namespace, allow_ast=True), namespace)
+
+
+def bound_folder(namespace: str, request: Request) -> Path:
+    require_origin(request)
+    if not (root := os.getenv("EFFECT_FRAMEWORK_ROOT")):
+        raise HTTPException(503, "后端尚未配置 EFFECT_FRAMEWORK_ROOT。")
+    return workbench_call(namespace_folder, Path(root).resolve(), namespace)
+
+
+@router.get("/namespaces/{namespace}/gened")
+def generated_module(namespace: str, request: Request, file: str | None = None):
+    return workbench_call(source_document, bound_folder(namespace, request), True, file)
+
+
+@router.get("/namespaces/{namespace}/facade/source")
+def handwritten_module(namespace: str, request: Request, file: str | None = None):
+    return workbench_call(source_document, bound_folder(namespace, request), False, file)
+
+
+@router.put("/namespaces/{namespace}/facade/source")
+def write_module(namespace: str, file: str, request: Request, source: str = Body(), if_match: str = Header()):
+    return workbench_call(save_facade, bound_folder(namespace, request), namespace, file, source, if_match.strip('"'))
+
+
+@router.get("/namespaces/{namespace}/plan")
+def gen_plan(namespace: str, request: Request):
+    framework = bound_framework(request, namespace, allow_ast=True)
+    return stamp(namespace, workbench_call(framework.read_json, "console", namespace))
 
 
 @router.get("/namespaces/{namespace}/workflow")
@@ -100,7 +147,7 @@ async def optimize(namespace: str, request: Request):
 
 @router.post("/namespaces/{namespace}/commands/{action}")
 async def command(namespace: str, action: Literal["compile", "run"], request: Request):
-    framework = bound_framework(request, namespace)
+    framework = bound_framework(request, namespace, allow_ast=True)
     return StreamingResponse(command_output(request, framework, namespace, action == "run"),
                              media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -108,7 +155,7 @@ async def command(namespace: str, action: Literal["compile", "run"], request: Re
 
 @router.post("/namespaces/{namespace}/registrations", status_code=201)
 def create_registration(namespace: str, document: dict, request: Request, if_match: str = Header()):
-    framework = bound_framework(request, namespace)
+    framework = bound_framework(request, namespace, allow_ast=True)
     try:
         return add_registration(namespace, if_match.strip('"'), document, framework)
     except RegistrationConflict as error:
