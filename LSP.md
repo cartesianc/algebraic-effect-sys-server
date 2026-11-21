@@ -5,9 +5,7 @@
 | 接口归属 | 实现状态与用途 |
 | --- | --- |
 | 框架 SDK，已实现 | `effect-codegen workflow Namespace` 检查业务源码，按需更新 `Generated/{Assets,Effects,Handlers,Prototype,Program}.hs`、`Generated/Workflow.json` 和私有 `.scope-cache`。已编译的业务程序支持 `--structure`，核对输入后打印静态结构，无需运行业务 handler。 |
-| 框架 SDK，AST 读取已实现（分支） | `effect-codegen ast Namespace` 只加载 `AST.hs`、`Workflow/*.hs` 和可选的 `Hanging.hs`，不读注册与 handler，不写 Generated。输出原样结构（具名绑定、源码范围）、规范形式与 `NodeId`、每个节点化简自哪些源码路径、Hanging 挂载的两种坐标、结构诊断和所读源码文件的 MD5（JSON）。完整生成成功时把同样内容写入 `Generated/Workflow.json`：网页打开时直接读它，用 Python 的 `hashlib.md5(data.replace(b"
-", b"
-"))` 核对 `sources`（CRLF 先换成 LF），一致就无需运行 SDK；文件缺失表示尚未生成，MD5 不同表示 AST 已改、需要重新生成，可先用 `ast` 显示当前结构。位于 [`feat/ast-normal-form`](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/tree/f90bc6f)，尚未合入 `main`。 |
+| 框架 SDK，AST 读取已实现（分支） | `effect-codegen ast Namespace` 只加载 `AST.hs`、`Workflow/*.hs` 和可选的 `Hanging.hs`，不读注册与 handler，不写 Generated。输出原样结构（具名绑定、源码范围）、规范形式与 `NodeId`、每个节点化简自哪些源码路径、Hanging 挂载的两种坐标、结构诊断和所读源码文件的 MD5（JSON）。完整生成成功时把同样内容写入 `Generated/Workflow.json`：网页打开时直接读它，用 Python 的 `hashlib.md5(data.replace(b"\r\n", b"\n"))` 核对 `sources`（CRLF 先换成 LF），一致就无需运行 SDK；文件缺失表示尚未生成，MD5 不同表示 AST 已改、需要重新生成，可先用 `ast` 显示当前结构。位于 [`feat/ast-normal-form`](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/tree/f90bc6f)，尚未合入 `main`。 |
 | Effect 模板工具，已实现 | SDK 的 `read-effect` 从标准输入解析单条表达式，`read-effects Namespace` 查看本地注册列表。Python 的 `read`、`generate`、`inspect` 可在命令行使用。 |
 | 框架 SDK，待交付 | `effect-codegen read Namespace` 提供带源码位置的声明 JSON；只读 `effect-codegen check Namespace` 提供语义检查及结构化结果。方法体占位 `agentic (Agentic "任务键")` 的导出和识别也待实现。 |
 | Python 服务，已实现 | FastAPI 的 `GET /api/v1/test/` 可验证 HTTP 服务已启动。[启动说明](README.md) |
