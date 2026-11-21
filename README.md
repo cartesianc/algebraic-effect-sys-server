@@ -1,6 +1,6 @@
 # Effect Server
 
-本仓库是 Haskell EDSL 网页编辑器的 Python 后端。当前可运行 FastAPI 服务。项目目录、LSP 模块分工和接入步骤见 [Python LSP 构建指南](LSP.md)。
+本仓库是 aged donkey 的 Python 后端，通过 FastAPI 为 Haskell EDSL 工作台提供注册、工作流和诊断。项目目录、LSP 模块分工和接入步骤见 [Python LSP 构建指南](LSP.md)。
 
 ## 启动开发服务器
 
@@ -61,6 +61,8 @@ FastAPI 的 `GET /api/v1/console/namespaces` 列出已发布的命名空间，`G
 Workflow 用 `GET /api/v1/console/namespaces?workflow=true` 同时列出绑定工作树中含 `AST.hs` 的命名空间。`GET …/{namespace}/workflow` 返回生成报告的状态，并在 `current` 中给出命名空间内各手写模块当前的 MD5（CRLF 先换成 LF），网页据此丢弃源码改动前的优化预览；`POST …/{namespace}/workflow/optimize` 运行只读 AST 分析，源码加载失败时以 422 返回 GHC 文本。这些工作树请求使用与编译相同的 Origin 校验。
 
 工作流中的 `chain [...]` 对应快照节点 `{"kind": "Chain", ...}`，`children` 保留声明顺序。更新旧工作树的顺序组合名称后，重新构建 SDK 并发布相应命名空间的快照。
+
+使用 `feat/request-chains` 时，将 SDK、工作树和快照目录绑定在同一版本，并重新发布快照。工作台从 v1 注册数据沿 Input 和 `requests` 展开消费链。普通 Context 由请求方驱动，单独执行上游句柄不会发布资产。普通读取缺少请求方时，注册写入接口返回 422，并保留 `Asset never requested` 诊断；持续资产与 alternative 判定资产使用各自的生产协议。[框架规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/d10d717/docs/CORE_DESIGN.md#request-production)
 
 从 Console 添加注册、编译或执行程序前，先按[绑定框架工作树](#framework-root)启动服务。
 

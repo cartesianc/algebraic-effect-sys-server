@@ -17,6 +17,10 @@
 
 ## 代码长什么样
 
+在 `feat/request-chains` 的 Console 快照中，普通资产的 `requests` 声明把唯一生产方作为请求方的前驱，生产方本身的 Input 和 requests 也进入注册图。以 Crawler 为例，`PrintPage` 请求 `StartPageSummary`，生产链包含 `FetchPage → KeepPageBody → ExtractPage`。`FetchPage` 请求 `StartURL`，其 Input `CrawlSession` 又请求 `CrawlSessionInfo`。图上的共用卡片表示同一份注册，每个请求方执行时各自发起请求。图上每条 Input 表示已声明的依赖。普通 Context 或 Pure 通过方法体中的 `rawinput` 拉取上游，在没有同次输出可回放时，调用次数取决于方法体实际读取几次。[候选 SDK 的生产规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/d10d717/docs/CORE_DESIGN.md#request-production)
+
+普通 `requires` 读取已发布的值。若没有任何注册请求该契约，SDK 会报告 `Asset never requested`；成功生成还要满足既有的 AST 可达性等检查。alternative 的判定 Context 由 selector 尝试解析，持续 Context 由会话交付。单独执行普通资产的上游句柄不会自动发布它。注册接口以 422 返回 SDK 诊断原文。切换工作树时重新发布 Console 快照，JSON 仍为 v1。
+
 当前工作树的顺序组合写作 `chain [node "Report"]`。SDK 在 Console 快照中将它导出为 `workflow.kind = "Chain"`，Python 原样传递 `kind` 和有序的 `children`。
 
 下面是 `LinesDemo/Handlers.hs` 中的手写方法。注册声明了驱动它的资产，方法体给出了具体的读法。
@@ -239,7 +243,7 @@ LSP 按 namespace 与方法名保存任务说明，用 SDK 绑定的定义身份
 
 查询 `RunningTotal` 应返回类型 `LinesDemo.Types.Total`、生产 Context `CountParser` 和 parser `parseTotal`。`ShowTotal` 通过 `streams` 持续执行，`Report` 通过 `requires` 有限读取，两个方法体都用 `require @Total`。默认的 `monitorLines` 内复用 `TextCounter` 的同次输出，lifelong 完成后的 `Report` 从会话读取保留的最新发布。默认 Prototype 也列出根级候选计划 `Derive "TextLine"`，UI 须标明计划所属范围。将 `ast` 改为 `snapshotAst` 并把 Hanging 目标同步改到 `snapshotAst` 后，独立的派生会话可以为 `Report` 的一次读取提供值。[两种会话计划与工作流读点](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/demo/LinesDemo/Generated/Prototype.hs)
 
-`String` 和 `[String]` 各按完整的 `TypeRep` 识别，注册中的 `FilePath` 与 `String` 同型。业务表示类型按当前编译单元、定义模块和本地声明名核对，补全和跳转以解析出的定义去重。`OpenFilesDemo` 的 `OpenedFiles` 和 `InspectedFiles` 各有生产方，但都跳到 `OpenFilesDemo.Types.FileHandles`。生成的 Prototype 对二者均写 `SDK.typeRef @AssetTypes.FileHandles`，在目标组件中重新取得身份。GHCi 分析时的单元标识只用于该编译上下文。[SDK 的类型身份](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/sdk/Framework/Language/Registration.hs) · [OpenFilesDemo 生成产物](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/demo/OpenFilesDemo/Generated/Prototype.hs)
+`String` 和 `[String]` 各按完整的 `TypeRep` 识别，注册中的 `FilePath` 与 `String` 同型。业务表示类型按当前编译单元、定义模块和本地声明名核对，补全和跳转以解析出的定义去重。`FacadeProbe` 的 `ReportBody` 和 `ReplyBody` 各有生产方，两者都跳到 `FacadeProbe.Types.Body`。生成的 Prototype 对二者均写 `SDK.typeRef @AssetTypes.Body`，在目标组件中重新取得身份。GHCi 分析时的单元标识只用于该编译上下文。[SDK 的类型身份](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/sdk/Framework/Language/Registration.hs) · [FacadeProbe 生成产物](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/d10d717/demo/FacadeProbe/Generated/Prototype.hs)
 
 ## 第一步　保存后检查 EDSL，发布静态快照
 
@@ -324,7 +328,7 @@ HLS 诊断走标准 `textDocument/publishDiagnostics`，框架继续走 `framewo
 - **源码与挂载。** `framework/read` 返回原文及指纹。打开默认 `LinesDemo`，由 `framework/model` 定位 `ast`、`monitorLines` 和未挂载的 `snapshotAst`。选择 `TraceLine` 能跳到 Hanging 的 `monitorLines` 引用，展开位置为 `[1]`。`FacadeProbe` 通过 helper 构造的注册按只读展示。
 - **图与读点。** 首次成功的只读 `check` 后即可打开两张图。`InputSession` 是唯一 scope 根。`RunTextCounterGen` 和 `RunPrintLineGen` 都指向 `StreamTextLineGen`，点开分别定位 `stream @Line` 与 `require @Line`。在 `LineParser` 上看到 `effectHistory = True`，在 `[1]` 看到 `RunningTotal` 复用 `[1,0,1]` 的输出。打开 `FileDemo` 的选择表可查到共同来源 `ReadFile` 和按序的 `BlankText`、`FilledText`。
 - **正式诊断。** 关闭 HLS，只把 `LinesDemo.AST.ast` 内的 `node "Report"` 改为 `node "Reprot"`，保留备用分支原文。保存回执先到，随后显示未知目标及本次 revision，旧图标出上次成功的 revision。改回后错误消失。另将 `report` 方法体改为 `rawoutput []`，保留 `Report` 的 `requires "RunningTotal"`。GHC 能加载方法体，随后 SDK 在方法组合阶段报告 `Report` 的 handler 从未读取 `RunningTotal`。两次用例中，保存检查前后五个生成源文件和 `.scope-cache` 的指纹应一致。给 `Types.hs` 加手写 instance 时，固定形式的正式诊断也来自 `check`。
-- **资产查询。** 在 `OpenFilesDemo` 中，`FileNames` 显示为内建 `[String]`。`OpenedFiles` 和 `InspectedFiles` 分别定位到生产 Context `FileResources` 和 `InspectionSnapshot`，两者的类型链接均指向同一个 `FileHandles` 定义。
+- **资产查询。** 在 `OpenFilesDemo` 中，`FileNames` 显示为内建 `[String]`。`FinishInspection` 先请求再读取 `FileNames`。在 `FacadeProbe` 中，`ReportBody` 和 `ReplyBody` 分别定位到 `ReportDraft` 和 `ReplyDraft`，类型链接均指向同一个 `Body` 定义。
 - **保存保护。** 服务在握手时拒绝未获准的 Origin，在保存时拒绝根外 URI 或磁盘指纹冲突。连续保存只展示最新 revision 的结果。分析超时后可观察到旧分析进程及其 GHCi 子进程退出。
 
 ### 阶段 B　编辑事务与显式生成

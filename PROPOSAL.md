@@ -163,7 +163,7 @@ instance NextLineLayer m => NextLineHandler m where
 | G5 | Handler | 写 instance 头和方法。方法体来自用户实现或 agentic 委派。委派元数据在 LSP 侧以 namespace 与方法名为键。约定的源码占位是 `agentic (Agentic "任务键")`，依赖 SDK 增加该入口，见第 5 节。 |
 | G6 | 脚手架 | 新建命名空间的 Types、Effects、AST、Main 和空 Handlers，以及 cabal executable 片段。cabal 片段以普通补丁预览，用户确认后应用。 |
 
-SDK 检查通过后，生成的 `Prototype` 在目标程序中通过类型应用重新取得身份。例如 `OpenFilesDemo` 的 `FileNames` 生成 `SDK.typeRef @[[Char]]`，`OpenedFiles` 与 `InspectedFiles` 均生成 `SDK.typeRef @AssetTypes.FileHandles`，但仍是两个契约。这里的 `AssetTypes` 是生成模块对 `OpenFilesDemo.Types` 的限定导入。LSP 将编译单元身份限定在当前快照内，因此无需把分析用 GHCi 的 home unit 写进业务源码，也不会因构建组件的单元标识变化而误报类型替换。[生成的实际引用](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/demo/OpenFilesDemo/Generated/Prototype.hs)
+SDK 检查通过后，生成的 `Prototype` 在目标程序中通过类型应用重新取得身份。例如 `OpenFilesDemo` 的 `FileNames` 生成 `SDK.typeRef @[[Char]]`，`FacadeProbe` 的 `ReportBody` 与 `ReplyBody` 分别生成 `SDK.typeRef @AssetTypes.Body`，各自保留契约和生产方。这里的 `AssetTypes` 是对 `FacadeProbe.Types` 的限定导入。LSP 将编译单元身份限定在当前快照内，因此无需把分析用 GHCi 的 home unit 写进业务源码，也不会因构建组件的单元标识变化而误报类型替换。[生成的实际引用](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/d10d717/demo/FacadeProbe/Generated/Prototype.hs)
 
 对于含自由表达式的手写源码，补丁只涉及能定位且能验证的区域。`Effects.hs` 的局部 helper 可在注册语义对照通过后转换为字面量，保留用户确认预览的步骤。
 
@@ -220,9 +220,9 @@ agentic 限制在单个方法体，模型拿到的就是它能知道的全部。
 **阶段 A：读得懂。** R1–R4、V1、V2，加上 LSP.md 第一步。
 
 - 读取现有 8 个命名空间。7 个 demo 有 Cabal 可执行目标，`FacadeProbe` 独立检验手写复用场景。协议内的声明按 R2 对照，`FacadeProbe/Effects.hs` 的 helpers 只读显示，能区分 `acquireFile` 的两次绑定：在 `ReportFile` 中 `require @String` 指向 `ReportPath`，在 `ReplyFile` 中指向 `ReplyPath`。
-- 打开 `LinesDemo`，能看到 `ast`、`monitorLines`、未挂载的 `snapshotAst`，以及挂在 `monitorLines` 上的 `TraceLine`。`InputSession` 仍是 scope 根。当前方法图含 `RunTextCounterGen → StreamTextLineGen`，R3 将此读取标为 `stream @Line`。`Crawler` 中的 `parsePages`、`printPages` 可分别跳到 `Workflow/` 下的定义。
+- 打开 `LinesDemo`，能看到 `ast`、`monitorLines`、未挂载的 `snapshotAst`，以及挂在 `monitorLines` 上的 `TraceLine`。`InputSession` 仍是 scope 根。当前方法图含 `RunTextCounterGen → StreamTextLineGen`，R3 将此读取标为 `stream @Line`。在 `feat/request-chains` 的 Crawler 中，`ast = printPages`，可跳到 `Workflow/PrintPages.hs`；两份页面摘要的生产链分别从请求它们的打印节点展开。
 - `report` 列出 `require @Total`，`countText` 列出 `stream @Line`，`LineParser` 的 `effectHistory = True`。在候选副本中把 `report` 的方法体换成 `rawoutput []`，并保留 `Report` 原有的 `requires "RunningTotal"`。GHC 仍能给方法体定型，SDK 应指出该 effect 声明的资产没有读取依据。恢复方法体后诊断消失。
-- `OpenFilesDemo` 读回 `Asset @[String] "FileNames"`、`Asset @FileHandles "OpenedFiles"` 与 `Asset @FileHandles "InspectedFiles"`。第一项标明内建表示，后两项显示各自的契约与生产方，都能跳转到 `OpenFilesDemo.Types.FileHandles`。`FileDemo` 的 option 视图显示来源 `ReadFile`、按序的 `BlankText`、`FilledText` 两个判定 Context，以及两个读点均为 `FromOwnChain`（不等待）。`FacadeProbe` 的选择位置 `[4,-1]`（规范形式中 `chain [node "ShowReport", node "ShowReply"]` 拼入根序列） 同样显示来源 `InspectReport` 与 `ReportBlank`、`ReportFilled`。
+- `OpenFilesDemo` 读回 `Asset @[String] "FileNames"` 和 `Asset @FileHandles "OpenedFiles"`。前者标明内建表示，后者可跳转到 `OpenFilesDemo.Types.FileHandles`。`FileDemo` 的 option 视图显示来源 `ReadFile`、按序的 `BlankText`、`FilledText` 两个判定 Context，以及两个读点均为 `FromOwnChain`（不等待）。`FacadeProbe` 的选择位置 `[3,-1]`（`ShowReport`、`ShowReply` 依次请求自己的统计资产）同样显示来源 `InspectReport` 与 `ReportBlank`、`ReportFilled`。
 - 把 `LinesDemo.AST.ast` 中的 `node "Report"` 改成 `node "Reprot"`，保存后得到框架的未知目标错误。备用导出 `snapshotAst` 保留原文。
 
 **阶段 B：写得出。** G1–G6、E1–E4，加上 LSP.md 第二、三步。
