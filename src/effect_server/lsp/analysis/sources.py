@@ -59,15 +59,15 @@ def facade(framework: Framework, namespace: str) -> dict:
     files = modules(namespace_folder(framework.root, namespace), False)
     if "Effects.hs" not in files:
         return {"files": list(files), "editable": False, "registrations": [], "error": "缺少 Effects.hs"}
-    with namespace_lock(namespace):
-        original = files["Effects.hs"].read_bytes()
-        try:
-            data = read_namespace(namespace, framework)
-        except ValueError as exc:
-            data = {"editable": False, "registrations": [], "error": str(exc)}
-        if files["Effects.hs"].read_bytes() != original:
-            raise RegistrationConflict("读取期间 Effects.hs 已更改，请刷新。")
-        return {**data, "namespace": namespace, "revision": "facade:" + revision(original), "files": list(files)}
+    effects = files["Effects.hs"]
+    original = effects.read_bytes()
+    try:
+        data = read_namespace(namespace, framework)
+    except ValueError as exc:
+        data = {"editable": False, "registrations": [], "error": str(exc)}
+    if effects.read_bytes() != original:
+        raise RegistrationConflict("读取期间 Effects.hs 已更改，请刷新。")
+    return {**data, "namespace": namespace, "revision": "facade:" + revision(original), "files": list(files)}
 
 
 def inspect_haskell(raw: bytes) -> dict:
