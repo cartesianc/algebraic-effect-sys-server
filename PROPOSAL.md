@@ -127,7 +127,7 @@ instance NextLineLayer m => NextLineHandler m where
 
 | 编号 | 模块 | 内容 | 位置 |
 | --- | --- | --- | --- |
-| R1 | 声明读取器 | AST 部分已由 `effect-codegen ast Namespace` 提供：原样结构及具名绑定、源码范围，规范形式与 `NodeId`，Hanging 挂载和结构诊断，不需要注册或 handler 能加载（[`feat/ast-normal-form`](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/tree/f90bc6f)，未合入 `main`）。其余声明拟新增 `effect-codegen read Namespace`。用 GHC 9.12 解析声明模块，记录注册、具名 AST、Hanging、固定形式资产及源码范围，返回带 schema 版本的 JSON。用 GHC 的重命名结果解析引用和导入别名。依赖出错时先返回已有拼写和范围，未解析的类型标明状态，不用同名的本地定义补齐。读取过程无需启动求值用的 GHCi。 | SDK 子命令 |
+| R1 | 声明读取器 | AST 部分已由 `effect-codegen ast Namespace` 提供：原样结构及具名绑定、源码范围，规范形式与 `NodeId`，Hanging 挂载和结构诊断，不需要注册或 handler 能加载（自 `main` 的 [`5b86712`](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/tree/5b86712) 起）。其余声明拟新增 `effect-codegen read Namespace`。用 GHC 9.12 解析声明模块，记录注册、具名 AST、Hanging、固定形式资产及源码范围，返回带 schema 版本的 JSON。用 GHC 的重命名结果解析引用和导入别名。依赖出错时先返回已有拼写和范围，未解析的类型标明状态，不用同名的本地定义补齐。读取过程无需启动求值用的 GHCi。 | SDK 子命令 |
 | R2 | 与 SDK 语义对照 | 同一 revision 上对照按序的 `EffectSpec`、从 `N.AST.ast` 展开的工作流，以及每条 Hanging 的 hook 和目标。`loadComposition` 当前经 GHCi 运行 `beginComposition`，`loadHanging` 另用 GHC 定义身份取得目标限定名及全部挂载路径。拟议 `check` 导出这些事实用于对照。资产对照在同一编译上下文中比较契约名与解析后的 `TypeRef`，限定导入和重导出可以有不同的源码拼写。语义相等还需单独核对具名引用、重复挂载和未挂载绑定。协议外结构沿用 SDK 的结果展示。 | SDK |
 | R3 | Handler 读取与用法索引 | 定位手写 instance、方法及调用范围。文本预检提供即时提示，最终按 GHC 在调用位置解析出的 SDK 方法及其形状确认 `require @T`、`stream @T` 和 `rawinput`，按绑定解析资产路由。见 3.4。 | Python + SDK 导出 |
 | R4 | 源码模型与符号索引 | `project/model.py` 分别记录契约名与唯一生产 Context、表示类型（内建种类或本次编译的定义单元、模块、类型名），以及使用位置的原始类型写法和范围。`project/index.py` 按定义建立 effect、契约、handler、AST 绑定、类型与引用的双向索引。限定名、导入别名和重导出保留各自的源码范围，跨模块同名类型各有独立索引项。 | Python |
