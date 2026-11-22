@@ -2,7 +2,7 @@
 
 本提案沿用 [LSP.md](LSP.md) 的保存检查、显式生成、`planEdits / applyEdits`、`framework/context` 和快照设计。以下规则和示例以框架 `main` 的 `ed5273d`（2026-11-21，已推送）为基线。适配器在结果中记录所配置框架 checkout 的实际 revision。[框架基线](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/tree/ed5273d)
 
-当前 SDK 提供会写入 `Generated/` 的 `effect-codegen workflow Namespace`。Effect 注册已支持 v1 JSON、模板生成与读回核对，见 [LSP 构建指南](LSP.md#模板的双向序列化)。项目级 `read`、只读 `check`、其余实体的 JSON 导出和 `agentic` 占位仍是拟交付接口。
+当前 SDK 提供会写入 `Generated/` 的 `effect-codegen compiler Namespace`。Effect 注册已支持 v1 JSON、模板生成与读回核对，见 [LSP 构建指南](LSP.md#模板的双向序列化)。项目级 `read`、只读 `check`、其余实体的 JSON 导出和 `agentic` 占位仍是拟交付接口。
 
 ## 0. 这一版的起点
 
@@ -255,4 +255,4 @@ agentic 限制在单个方法体，模型拿到的就是它能知道的全部。
 
    目标写法是 `report = agentic (Agentic "LinesDemo.report")`。任务说明和提示词由 LSP 保存。适配器应按 SDK 的绑定身份和任务键识别占位，报告“等待填写”。这个表达式在导出后可有预期的 Haskell 类型，执行到占位仍会失败。未填写的方法没有真实读取形状，依赖方法体的检查应标为待完成，其他可检查的错误仍须报告。
 4. **框架尚未实现的持续与选择语义，LSP 不展示为能力。** 流结束后的历史保存（U2）与背压（U3）暂不实施，历史只在 end GC 释放；来源不同的真 race 由 gen 拒绝，LSP 原样展示该诊断。
-5. **需要单独确认实施的 SDK 工作。** 新增 `read`、只读 `check`、R2 所需的语义对照和 Prototype 等结构化输出，以及 `Agentic` 的导出与占位识别。当前生成命令仍是 `effect-codegen workflow Namespace`，它会写入 Generated 区。
+5. **需要单独确认实施的 SDK 工作。** 新增 `read`、只读 `check`、R2 所需的语义对照和 Prototype 等结构化输出，以及 `Agentic` 的导出与占位识别。当前生成命令仍是 `effect-codegen compiler Namespace`，它会写入 Generated 区。

@@ -4,7 +4,7 @@
 
 | 接口归属 | 实现状态与用途 |
 | --- | --- |
-| 框架 SDK，已实现 | `effect-codegen workflow Namespace` 检查业务源码，按需更新 `Generated/{Assets,Effects,Handlers,Prototype,Program}.hs`、`Generated/Workflow.json` 和私有 `.scope-cache`。已编译的业务程序支持 `--structure`，核对输入后打印静态结构，无需运行业务 handler。 |
+| 框架 SDK，已实现 | `effect-codegen compiler Namespace` 检查业务源码，按需更新 `Generated/{Assets,Effects,Handlers,Prototype,Program}.hs`和 `Generated/Workflow.json`。已编译的业务程序支持 `--structure`，核对输入后打印静态结构，无需运行业务 handler。 |
 | 框架 SDK，AST 读取已实现 | `effect-codegen ast Namespace` 只加载 `AST.hs`、`Workflow/*.hs` 和可选的 `Hanging.hs`，不读注册与 handler，不写 Generated。输出原样结构（具名绑定、源码范围）、规范形式与 `NodeId`、每个节点化简自哪些源码路径、Hanging 挂载的两种坐标、结构诊断和所读源码文件的 MD5（JSON）。完整生成成功时把同样内容写入 `Generated/Workflow.json`：网页打开时直接读它，用 Python 的 `hashlib.md5(data.replace(b"\r\n", b"\n"))` 核对 `sources`（CRLF 先换成 LF），一致就无需运行 SDK；文件缺失表示尚未生成，MD5 不同表示 AST 已改、需要重新生成，可先用 `ast` 显示当前结构。已合入 `main`（[`5b86712`](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/tree/5b86712)）。 |
 | Effect 模板工具，已实现 | SDK 的 `read-effect` 从标准输入解析单条表达式，`read-effects Namespace` 查看本地注册列表。Python 的 `read`、`generate`、`inspect` 可在命令行使用。 |
 | 框架 SDK，待交付 | `effect-codegen read Namespace` 提供带源码位置的声明 JSON；只读 `effect-codegen check Namespace` 提供语义检查及结构化结果。方法体占位 `agentic (Agentic "任务键")` 的导出和识别也待实现。 |
@@ -100,7 +100,7 @@ server/
 从框架根目录查实现时，可以从这三处进入。
 
 - `demo/LinesDemo/` 下的 `Effects.hs` 声明效果，`AST.hs` 组合工作流，`Hanging.hs` 挂载中间件，`Handlers.hs` 实现处理器，`Types.hs` 定义业务类型。`Generated/` 由显式生成操作写入。
-- `sdk/Framework/Gen.hs` 中的 `compileWorkflow` 串起分析和写入。`sdk/Framework/Gen/Frontend/Source.hs` 的 `loadHandlers` 把候选 `Generated.Effects` 作为内存模块交给本次 GHC 会话。保存时的检查可以使用这份候选契约，显式生成时才将它写入磁盘。
+- `sdk/Framework/Gen.hs` 中的 `compileNamespace` 串起分析和写入。`sdk/Framework/Gen/Frontend/Source.hs` 的 `loadHandlers` 把候选 `Generated.Effects` 作为内存模块交给本次 GHC 会话。保存时的检查可以使用这份候选契约，显式生成时才将它写入磁盘。
 - `sdk/Framework/Generated.hs` 处理业务程序的 `--structure`，`sdk/Framework/Prototype/Structure.hs` 将编译进程序的 Prototype 渲染成文本。
 
 ## 框架 LSP 的模块职责
@@ -289,7 +289,7 @@ Python 响应 `initialize` 并返回 `{"capabilities": {}}`，随后接收 `init
 
 ## 第二步　显式生成与结构文本
 
-网页发送 `framework/generate {namespace}`，后端校验已绑定的命名空间，调用预编译好的 `effect-codegen workflow Namespace`。生成与分析串行。生成器依次更新五个文件，最后更新 `.scope-cache`。生成进程退出后重新读取磁盘上的文件。成功时重新运行只读检查；失败时可能已有部分文件更新，网页应报告失败、将结构标为过期并允许重试。新保存可以取消旧的只读分析，正在写文件的生成应等其结束。
+网页发送 `framework/generate {namespace}`，后端校验已绑定的命名空间，调用预编译好的 `effect-codegen compiler Namespace`。生成与分析串行。生成器依次更新 `Generated/` 下的文件，内容未变的不重写。生成进程退出后重新读取磁盘上的文件。成功时重新运行只读检查；失败时可能已有部分文件更新，网页应报告失败、将结构标为过期并允许重试。新保存可以取消旧的只读分析，正在写文件的生成应等其结束。
 
 `framework/structure {namespace}` 可选用已编译业务程序的 `--structure` 文本视图。显式生成后，在同一构建目录重建过期的 demo 二进制。核对退出码、源码指纹和 revision，输入不匹配时将文本标为过期。下面的命令今天即可在框架工作树中使用。
 
@@ -329,7 +329,7 @@ HLS 诊断走标准 `textDocument/publishDiagnostics`，框架继续走 `framewo
 
 - **源码与挂载。** `framework/read` 返回原文及指纹。打开默认 `LinesDemo`，由 `framework/model` 定位 `ast`、`monitorLines` 和未挂载的 `snapshotAst`。选择 `TraceLine` 能跳到 Hanging 的 `monitorLines` 引用，展开位置为 `[1]`。`FacadeProbe` 通过 helper 构造的注册按只读展示。
 - **图与读点。** 首次成功的只读 `check` 后即可打开两张图。`InputSession` 是唯一 scope 根。`RunTextCounterGen` 和 `RunPrintLineGen` 都指向 `StreamTextLineGen`，点开分别定位 `stream @Line` 与 `require @Line`。在 `LineParser` 上看到 `effectHistory = True`，在 `[1]` 看到 `RunningTotal` 复用 `[1,0,1]` 的输出。打开 `FileDemo` 的选择表可查到共同来源 `ReadFile` 和按序的 `BlankText`、`FilledText`。
-- **正式诊断。** 关闭 HLS，只把 `LinesDemo.AST.ast` 内的 `node "Report"` 改为 `node "Reprot"`，保留备用分支原文。保存回执先到，随后显示未知目标及本次 revision，旧图标出上次成功的 revision。改回后错误消失。另将 `report` 方法体改为 `rawoutput []`，保留 `Report` 的 `requires "RunningTotal"`。GHC 能加载方法体，随后 SDK 在方法组合阶段报告 `Report` 的 handler 从未读取 `RunningTotal`。两次用例中，保存检查前后五个生成源文件和 `.scope-cache` 的指纹应一致。给 `Types.hs` 加手写 instance 时，固定形式的正式诊断也来自 `check`。
+- **正式诊断。** 关闭 HLS，只把 `LinesDemo.AST.ast` 内的 `node "Report"` 改为 `node "Reprot"`，保留备用分支原文。保存回执先到，随后显示未知目标及本次 revision，旧图标出上次成功的 revision。改回后错误消失。另将 `report` 方法体改为 `rawoutput []`，保留 `Report` 的 `requires "RunningTotal"`。GHC 能加载方法体，随后 SDK 在方法组合阶段报告 `Report` 的 handler 从未读取 `RunningTotal`。两次用例中，保存检查前后五个生成源文件的指纹应一致。给 `Types.hs` 加手写 instance 时，固定形式的正式诊断也来自 `check`。
 - **资产查询。** 在 `OpenFilesDemo` 中，`FileNames` 显示为内建 `[String]`。`FinishInspection` 先请求再读取 `FileNames`。在 `FacadeProbe` 中，`ReportBody` 和 `ReplyBody` 分别定位到 `ReportDraft` 和 `ReplyDraft`，类型链接均指向同一个 `Body` 定义。
 - **保存保护。** 服务在握手时拒绝未获准的 Origin，在保存时拒绝根外 URI 或磁盘指纹冲突。连续保存只展示最新 revision 的结果。分析超时后可观察到旧分析进程及其 GHCi 子进程退出。
 

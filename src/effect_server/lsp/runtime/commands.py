@@ -23,7 +23,7 @@ def generate_graph(namespace: str, folder: Path, framework: Framework) -> dict:
     with namespace_lock(namespace):
         graph = read_prototype(folder, namespace)
         if graph is None:
-            framework.run("workflow", namespace)
+            framework.run("compiler", namespace)
             graph = read_prototype(folder, namespace)
             if graph is None:
                 raise ValueError("SDK 生成结束，但未找到 Generated/Prototype.hs。")
@@ -71,7 +71,7 @@ async def steps(framework: Framework, ns: str, execute: bool):
     root = framework.root
     entry = await asyncio.to_thread(entry_for, root, ns)
     target = executable_target(root, entry.main)
-    yield "生成", framework.command("workflow", ns)
+    yield "生成", framework.command("compiler", ns)
     if target:
         yield "编译", ["cabal", "build", target]
         if execute:

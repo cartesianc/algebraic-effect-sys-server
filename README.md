@@ -69,7 +69,7 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 | `PUT /facade/source?file=Effects.hs` | 以 JSON 字符串提交源码，`If-Match` 使用读取时的文件 SHA-256。冲突返回 409。 |
 | `GET /gened?file=Handlers.hs` | tree-sitter-haskell 解析磁盘上的 Generated 模块，返回原文、模块名、定义行范围、模块内同名引用及语法诊断。 |
 | `GET /plan` | tree-sitter-haskell 读取 `Generated/Prototype.hs` 的 effect、方法图、选择分支和资产关系，结合可用的 `Generated/Handlers.hs` 显示实现。已有原型直接返回图，缺文件返回 JSON `null`，语法或结构错误返回 422。 |
-| `POST /plan` | 用户点击「生成图分析」时调用。持有命名空间锁期间，缺原型才运行已有的 `effect-codegen workflow Namespace`，再读取生成的 Haskell 文件。 |
+| `POST /plan` | 用户点击「生成图分析」时调用。持有命名空间锁期间，缺原型才运行已有的 `effect-codegen compiler Namespace`，再读取生成的 Haskell 文件。 |
 
 命令行运行 `poetry run python -m effect_server.lsp --root $framework --sdk $sdk inspect FacadeProbe --cards` 可取得同一份卡片模型。
 
