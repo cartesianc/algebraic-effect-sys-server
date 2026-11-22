@@ -84,6 +84,7 @@ def card_graph(rows: list, effects: bytes, handlers: bytes) -> dict:
             contract = demand["contract"]
             assets.setdefault(contract, (None, None))
             edges.append({"from": "asset:" + contract, "to": name, "access": demand["access"]})
+    production_steps = set()
     for contract, (representation, producer) in assets.items():
         chain = []
         seen = set()
@@ -93,6 +94,17 @@ def card_graph(rows: list, effects: bytes, handlers: bytes) -> dict:
             producer = inputs[producer]
         cards.append({"id": "asset:" + contract, "label": contract, "kind": "Asset", "category": "asset",
                       "representation": representation, "producerChain": chain[::-1]})
+        production_steps.update(chain)
+    # A Pure or Context on an ordinary effect's Input path remains part of the overview.
+    production_only = {c["id"] for c in cards if c["kind"] in {"Pure", "Context"} and c["id"] in production_steps}
+    for effect in inputs.keys() - production_only:
+        parent = inputs[effect]
+        while parent in production_only:
+            production_only.remove(parent)
+            parent = inputs[parent]
+    for card in cards:
+        if card["id"] in production_only:
+            card["productionOnly"] = True
     definitions = method_definitions(handlers, set(owners))
     return {"cards": cards, "edges": edges, "handlers": {
         h: {"effects": uses, "definitions": definitions[h]} for h, uses in owners.items()
