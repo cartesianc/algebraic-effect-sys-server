@@ -6,14 +6,13 @@ import subprocess
 import sys
 from threading import Lock
 
-from ..runtime.snapshot import RegistrationConflict
-
-
 _dialog = Lock()
 
 
 def browse(kind: str, initial: str):
     if not _dialog.acquire(blocking=False):
+        # Only the server uses this exception; the GUI runs as a standalone script.
+        from ..runtime.snapshot import RegistrationConflict
         raise RegistrationConflict("已有一个文件选择窗口打开。")
     try:
         result = subprocess.run([sys.executable, str(Path(__file__).resolve()), kind, initial],
