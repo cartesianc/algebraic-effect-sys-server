@@ -13,6 +13,8 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 
 服务默认监听 `http://127.0.0.1:8000`。
 
+手写源码页可以使用服务端的 Haskell Language Server（HLS）检查未保存的代码、查看类型和跳转到定义。打开手写源码页时才启动 HLS，同一编辑页中的文件共享进程；退出页面时释放。服务端从 PATH 查找 `haskell-language-server-wrapper`，也可用 `EFFECT_HLS` 指定可执行文件。缺少 HLS 时仍可编辑和保存，SDK 编译与执行使用项目自身的 GHC/Cabal 环境。安装支持项目 GHC 版本的 HLS 后，可在编辑页重新连接。参见 [HLS 安装指南](https://haskell-language-server.readthedocs.io/en/stable/installation.html)。
+
 <a id="framework-root"></a>
 ## 绑定框架工作树
 
@@ -50,8 +52,8 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 | `GET /projects` | 返回项目 ID、显示名、根目录、工具路径及 `sdkReady`。 |
 | `POST /browse` | `{"kind":"directory","initial":"D:/work"}` 打开服务端桌面的系统目录选择器。选择工具时使用 `executable`，取消返回 `{"path":null}`。 |
 | `POST /projects/import` | `{"root":"D:/work/existing","name":"业务系统"}`。项目保留 `sdk/Framework/SDK.hs`，工作台根据调用 `interpreter ast effects` 的入口及模块导入识别命名空间和源码目录。可传 `executable` 指定生成器。 |
-| `POST /projects` | `{"root":"D:/work/orders","name":"订单","sdk_root":"D:/sdk","namespace":"Orders.App","source_dir":"src"}`。初始化 SDK、Cabal 项目及首个命名空间。源码目录相对于项目根，默认 `src`。自定义目录需要支持 `--source-dir` 的 effect-codegen。 |
-| `POST /projects/{id}/sdk/build` | 在该项目内执行 `cabal build exe:effect-codegen` 并登记本地工具。 |
+| `POST /projects` | 只需 `{"root":"D:/work/orders"}`，直接在该目录创建工作区，项目名和首个命名空间均为 `Orders`。可传 `namespace` 指定名称，无法从目录名生成合法模块名时默认 `App`。对同一目录提交 `{"root":"D:/work/orders","namespace":"Billing"}` 会在同一项目添加命名空间，沿用业务源码目录和 SDK，返回原项目 ID 和新命名空间。存在多个源码目录时可指定 `source_dir`。默认解压构建内置 SDK，`sdk_path` 可指定已有 SDK，`install_sdk:false` 可暂缓安装。 |
+| `POST /projects/{id}/sdk/build` | 从新项目的内置压缩包补齐缺少的 `sdk/`，执行 `cabal build exe:effect-codegen` 并登记本地工具。 |
 | `POST /projects/{id}/namespaces` | `{"namespace":"Payments"}`。沿用已有入口的源码目录。存在多个目录时指定 `source_dir`。创建可编辑的 `Types.hs`、`Effects.hs`、`AST.hs`、`Handlers.hs`、`Main.hs`。已有目录返回 409。 |
 
 图、源码、注册和编译运行均可通过 `/projects/{id}/namespaces/…` 访问。项目中的草稿、编译请求和工作台分析快照按项目区分。模板提供一个 `Start` 节点及 handler；首次生成时由 SDK 写入标准 Generated 模块。新项目的首个命名空间有 Cabal executable，后加的命名空间可由工作台通过现有独立程序构建入口运行。
@@ -66,7 +68,10 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 | --- | --- |
 | `GET /facade` | SDK 读取手写注册。响应中的 `graph.cards`、`graph.edges` 和 `graph.handlers` 描述注册、资产、Input、demand 与手写方法绑定。源码定位携带文件指纹和起止行。 |
 | `GET /facade/source?file=Effects.hs` | 读取业务 Haskell 模块的原文、定义索引及语法诊断。 |
+| `GET /facade/workflow` | 从手写的 `AST.hs:ast` 读取组合与节点，跟随本命名空间的 Workflow 模块引用。返回分支的源码位置标识与版本，供画布通过 `POST /authoring` 追加节点或分支、为分支命名。 |
 | `PUT /facade/source?file=Effects.hs` | 以 JSON 字符串提交源码，`If-Match` 使用读取时的文件 SHA-256。冲突返回 409。 |
+| `GET /authoring` | 返回手写源码版本、注册、已实现方法、资产表示类型及可编辑分支。 |
+| `POST /authoring` | 使用上述版本作为 `If-Match`，按 `kind` 提交 asset、handler 或 workflow。注册时同时新建方法使用 `kind=registration`、Facade 的版本和按方法名索引的 `handlers`。服务在候选副本中运行 SDK 编译器，成功后写回业务文件。 |
 | `GET /gened?file=Handlers.hs` | tree-sitter-haskell 解析磁盘上的 Generated 模块，返回原文、模块名、定义行范围、模块内同名引用及语法诊断。 |
 | `GET /plan` | tree-sitter-haskell 读取 `Generated/Prototype.hs` 的 effect、方法图、选择分支和资产关系，结合可用的 `Generated/Handlers.hs` 显示实现。已有原型直接返回图，缺文件返回 JSON `null`，语法或结构错误返回 422。 |
 | `POST /plan` | 用户点击「生成图分析」时调用。持有命名空间锁期间，缺原型才运行已有的 `effect-codegen compiler Namespace`，再读取生成的 Haskell 文件。 |

@@ -3,32 +3,39 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, WebSocket, WebSocketException
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
+from starlette.requests import HTTPConnection
 
 from ...config import get_app_config
 from ...lsp.analysis.facade import facade
 from ...lsp.analysis.prototype import read_prototype
 from ...lsp.analysis.sources import namespace_folder, save_facade, source_document
+from ...lsp.analysis.source_workflow import source_workflow
 from ...lsp.codegen.registration import add_registration
+from ...lsp.codegen.authoring import Asset, Handler, Registration, WorkflowEdit, editor, fingerprint, save_edit, source_files
 from ...lsp.framework import Framework
+from ...lsp.editor import editor_session
 from ...lsp.project.entries import entries, entry_for
 from ...lsp.project.model import constructor_name
 from ...lsp.project.picker import browse
 from ...lsp.project.scaffold import create_namespace
-from ...lsp.project.workspaces import build_sdk, import_project, lookup, new_project, projects, startup_project
+from ...lsp.project.workspaces import absolute, build_sdk, create_in_folder, import_project, lookup, new_project, project_target, projects, startup_project
 from ...lsp.runtime.commands import command_output, generate_graph
 from ...lsp.runtime.snapshot import RegistrationConflict, console_home, directory, project_directory
 from ...lsp.runtime.workflow import AstLoadError, generated_workflow, optimize_workflow
 
 
-def check_browser_origin(request: Request) -> None:
+def check_browser_origin(request: HTTPConnection) -> None:
     origin = request.headers.get("origin")
     allowed = os.environ.get(
         "EFFECT_CONSOLE_ORIGINS", "http://127.0.0.1:3000,http://localhost:3000"
     )
-    if origin and origin not in {entry.strip() for entry in allowed.split(",")}:
+    origins = {entry.strip() for entry in allowed.split(",") if entry.strip()}
+    if request.scope["type"] == "websocket" and origin not in origins:
+        raise WebSocketException(code=1008)
+    if origin and origin not in origins:
         raise HTTPException(403, "Origin cannot read console snapshots")
 
 
@@ -51,10 +58,25 @@ class ImportProject(BaseModel):
     executable: str | None = None
 
 
-class NewProject(ImportProject):
+class TemplateProject(ImportProject):
     source_dir: str = "src"
     sdk_root: str
     namespace: str
+
+
+class NamedProject(BaseModel):
+    parent: str
+    name: str
+    install_sdk: bool = True
+    sdk_path: str | None = None
+
+
+class NewProject(BaseModel):
+    root: str
+    namespace: str | None = None
+    install_sdk: bool = True
+    sdk_path: str | None = None
+    source_dir: str | None = None
 
 
 @router.get("/projects", dependencies=[Depends(require_origin)])
@@ -73,8 +95,15 @@ def browse_local(kind: Literal["directory", "executable"] = Body(), initial: str
 
 
 @router.post("/projects", status_code=201, dependencies=[Depends(require_origin)])
-def initialize_project(body: NewProject):
-    return workbench_call(new_project, body.root, body.name, body.namespace, body.sdk_root, body.executable, body.source_dir)
+def initialize_project(body: NewProject | TemplateProject | NamedProject):
+    if isinstance(body, NewProject):
+        return workbench_call(create_in_folder, body.root, body.namespace, body.install_sdk, body.sdk_path, body.source_dir)
+    if isinstance(body, NamedProject):
+        target = workbench_call(project_target, body.parent, body.name)
+        return workbench_call(new_project, target, body.name, "App", body.sdk_path, None, "src",
+                              body.install_sdk or bool(body.sdk_path))
+    return workbench_call(new_project, workbench_call(absolute, body.root), body.name, body.namespace,
+                          body.sdk_root, body.executable, body.source_dir, True)
 
 
 async def bind_project(project_id: str, request: Request):
@@ -95,6 +124,23 @@ async def bind_project(project_id: str, request: Request):
 def project_root(request: Request):
     project = getattr(request.state, "project", None)
     return project.root if project else os.getenv("EFFECT_FRAMEWORK_ROOT")
+
+
+@router.websocket("/projects/{project_id}/namespaces/{namespace}/hls")
+async def handwritten_editor(ws: WebSocket, project_id: str, namespace: str):
+    try:
+        project = await asyncio.to_thread(lookup, project_id)
+        root = Path(project.root).resolve()
+        folder = await asyncio.to_thread(namespace_folder, root, namespace)
+    except (OSError, ValueError):
+        await ws.close(code=1008)
+        return
+    await ws.accept()
+    try:
+        await editor_session(ws, root, folder)
+    finally:
+        if ws.client_state.name == "CONNECTED" and ws.application_state.name == "CONNECTED":
+            await ws.close()
 
 
 @router.post("/projects/{project_id}/sdk/build", dependencies=[Depends(bind_project)])
@@ -180,6 +226,12 @@ def handwritten_module(namespace: str, request: Request, file: str | None = None
     return workbench_call(source_document, bound_folder(namespace, request), False, file)
 
 
+@workspace.get("/namespaces/{namespace}/facade/workflow")
+def handwritten_workflow(namespace: str, request: Request):
+    files = workbench_call(source_files, bound_folder(namespace, request))
+    return {"tree": workbench_call(source_workflow, files), "revision": fingerprint(files)}
+
+
 @workspace.put("/namespaces/{namespace}/facade/source")
 def write_module(namespace: str, file: str, request: Request, source: str = Body(), if_match: str = Header()):
     return workbench_call(save_facade, bound_folder(namespace, request), namespace, file, source, if_match.strip('"'))
@@ -235,6 +287,16 @@ def create_registration(namespace: str, document: dict, request: Request, if_mat
         raise HTTPException(409, str(error)) from error
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
+
+
+@workspace.get("/namespaces/{namespace}/authoring")
+def authoring_options(namespace: str, request: Request):
+    return workbench_call(editor, namespace, bound_framework(request, namespace))
+
+
+@workspace.post("/namespaces/{namespace}/authoring", status_code=201)
+def edit_business(namespace: str, document: Asset | Handler | WorkflowEdit | Registration, request: Request, if_match: str = Header()):
+    return workbench_call(save_edit, namespace, document, if_match.strip('"'), bound_framework(request, namespace))
 
 
 @workspace.post("/namespaces", status_code=201)

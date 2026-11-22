@@ -82,11 +82,15 @@ async def steps(framework: Framework, ns: str, execute: bool):
             binary = Path(result.stdout.strip())
     else:
         # Standalone namespaces such as FacadeProbe use the checkout's package environment.
-        out = root / "dist-newstyle" / "effect-studio" / ns
-        out.mkdir(parents=True, exist_ok=True)
-        binary = out / ("program.exe" if os.name == "nt" else "program")
-        yield "编译", ["cabal", "exec", "--", "ghc", "--make", "-threaded", "-isdk", "-i" + framework.source_dir.as_posix(),
-                       "-main-is", entry.main_module, "-outputdir", str(out), "-o", str(binary),
+        out = Path("dist-newstyle", "effect-studio", ns)
+        (root / out).mkdir(parents=True, exist_ok=True)
+        output = out / ("program.exe" if os.name == "nt" else "program")
+        binary = root / output
+        # Keep the same package database the generator used. A second cabal exec
+        # can replace it with a misencoded absolute path on Windows.
+        compiler = ["ghc"] if framework.environment().get("GHC_ENVIRONMENT") else ["cabal", "exec", "--", "ghc"]
+        yield "编译", [*compiler, "--make", "-threaded", "-isdk", "-i" + framework.source_dir.as_posix(),
+                       "-main-is", entry.main_module, "-outputdir", str(out), "-o", str(output),
                        str(entry.main)]
     if execute:
         yield "执行", [str(binary)]
@@ -114,7 +118,7 @@ def start_process(framework: Framework, args, *, stderr, stream=False):
                else {"start_new_session": True})
     return subprocess.Popen(
         args, bufsize=0, cwd=framework.root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=stderr, env={**os.environ, "EFFECT_CONSOLE_STREAM": "1"} if stream else None, **options,
+        stderr=stderr, env={**framework.environment(), **({"EFFECT_CONSOLE_STREAM": "1"} if stream else {})}, **options,
     )
 
 

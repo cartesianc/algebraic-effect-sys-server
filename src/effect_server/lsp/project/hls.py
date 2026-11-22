@@ -9,8 +9,34 @@ import subprocess
 from threading import Timer
 
 
+def hls_tool():
+    return shutil.which(os.getenv("EFFECT_HLS") or "haskell-language-server-wrapper")
+
+
+def write_message(pipe, message):
+    body = json.dumps({"jsonrpc": "2.0", **message}, ensure_ascii=False).encode("utf-8")
+    pipe.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+    pipe.flush()
+
+
+def read_message(pipe):
+    length = None
+    while True:
+        header = pipe.readline()
+        if not header:
+            raise EOFError("HLS 已退出")
+        if not header.strip():
+            break
+        key, _, value = header.partition(b":")
+        if key.lower() == b"content-length":
+            length = int(value)
+    if length is None or length < 1:
+        raise ValueError("HLS 返回了无效的数据包。")
+    return json.loads(pipe.read(length))
+
+
 def definitions(root: Path, main: Path, positions):
-    tool = shutil.which(os.getenv("EFFECT_HLS") or "haskell-language-server-wrapper")
+    tool = hls_tool()
     if not tool:
         return []
     options = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True})
@@ -27,24 +53,12 @@ def definitions(root: Path, main: Path, positions):
                         pass
 
         def send(**message):
-            body = json.dumps({"jsonrpc": "2.0", **message}).encode()
-            process.stdin.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
-            process.stdin.flush()
+            write_message(process.stdin, message)
 
         def call(number, method, params):
             send(id=number, method=method, params=params)
             while True:
-                length = 0
-                while True:
-                    header = process.stdout.readline()
-                    if not header:
-                        raise EOFError
-                    if not header.strip():
-                        break
-                    key, _, value = header.partition(b":")
-                    if key.lower() == b"content-length":
-                        length = int(value)
-                msg = json.loads(process.stdout.read(length))
+                msg = read_message(process.stdout)
                 if "method" in msg and "id" in msg:
                     if msg["method"] == "workspace/configuration":
                         send(id=msg["id"], result=[None] * len(msg["params"]["items"]))
