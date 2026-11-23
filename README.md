@@ -1,6 +1,8 @@
 # Effect Server
 
-本仓库是 aged donkey 的 Python 后端，通过 FastAPI 为 Haskell EDSL 工作台提供注册、工作流和诊断。项目目录、LSP 模块分工和接入步骤见 [Python LSP 构建指南](LSP.md)。
+本仓库实现 aged donkey 的框架 LSP 后端，通过 FastAPI 把 Haskell 项目解析为工作台使用的结构化数据。SDK 的声明、编译器和运行时在框架仓库，交互画布在前端仓库。[Haskell 框架与 SDK](https://github.com/cartesianc/algebraic-effect-sys-in-haskell) · [Web 工作台](https://github.com/cartesianc/algebraic-effect-sys-web-app) · [Python LSP 构建指南](LSP.md)
+
+业务编辑调用 SDK 的 `read-effects` 读取手写 Effect 注册，并从 `AST.hs` 及其引用的模块读取 Workflow。业务分析直接解析已生成的 `Generated/Prototype.hs`，从中追踪消费链、资产来源与方法调用，再从 `Generated/Workflow.json` 读取工作流报告。编辑手写源码时，可以按需启动 Haskell Language Server（HLS）获取类型、定义位置和诊断。
 
 ## 启动开发服务器
 
@@ -110,9 +112,9 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 
 入口可以单独放在 `app/Main.hs`。直接导入或使用模块别名时，工作台从语法树定位声明，首次生成前也可打开。经过重导出时，工作台通过项目的 HLS cradle 查询 `interpreter`、`ast` 和 `effects` 的定义位置。服务从 PATH 查找 `haskell-language-server-wrapper`，也可通过 `EFFECT_HLS` 指定可执行文件。HLS 需要能加载相关模块，查询结果随业务源码和 cradle 配置的变更失效。
 
-## Facade 编辑与 Gened 审阅
+## 业务编辑与业务分析接口
 
-接口前缀为 `/api/v1/console/namespaces/{namespace}`。工作树请求需要工作台的 Origin。绑定的框架和本地构建的 SDK 应当来自同一版本。
+已导入项目的接口前缀为 `/api/v1/console/projects/{id}/namespaces/{namespace}`。使用启动时绑定的默认工作树时，也可使用 `/api/v1/console/namespaces/{namespace}`。工作树请求需要工作台的 Origin。绑定的框架和本地构建的 SDK 应当来自同一版本。
 
 | 入口 | 数据来源与用途 |
 | --- | --- |
@@ -158,4 +160,4 @@ FastAPI 的 `GET /api/v1/console/namespaces` 列出已发布的命名空间，`G
 
 浏览器默认只允许 `http://127.0.0.1:3000` 和 `http://localhost:3000` 这两个源。更换网页地址时设置 `EFFECT_CONSOLE_ORIGINS`。
 
-对已发布的命名空间，工作台可向 `/api/v1/console/namespaces/{namespace}/commands/compile` 或 `…/commands/run` 发送带允许 Origin 的 POST。编译先用 SDK 的 `workflow` 更新生成文件，再构建该命名空间的程序。执行在编译成功后启动程序。响应是 NDJSON 流，依次报告阶段、合并的标准输出与错误输出，以及退出码或启动错误。停止或断开输出连接会终止当前命令及其子进程。
+对绑定项目中的命名空间，工作台可向 `…/commands/compile` 或 `…/commands/run` 发送带允许 Origin 的 POST。编译先运行 `effect-codegen compiler <Namespace>` 更新生成文件，再构建该命名空间的程序。执行在编译成功后启动程序。响应是 NDJSON 流，依次报告阶段、合并的标准输出与错误输出，以及退出码或启动错误。停止或断开输出连接会终止当前命令及其子进程。
