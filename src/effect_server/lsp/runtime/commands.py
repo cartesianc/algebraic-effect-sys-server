@@ -2,6 +2,7 @@
 
 import asyncio
 import codecs
+from contextlib import aclosing
 import json
 import os
 import re
@@ -98,6 +99,25 @@ async def steps(framework: Framework, ns: str, execute: bool):
 
 def event(kind: str, **data) -> bytes:
     return (json.dumps({"type": kind, **data}, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+async def command_result(events):
+    """MCP returns a single result. Retain the tail of long compiler/program output."""
+    result = {"stages": [], "output": "", "truncated": False, "exitCode": None}
+    async with aclosing(events):
+        async for line in events:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            if item["type"] == "stage":
+                result["stages"].append(item["text"])
+            elif item["type"] in {"output", "error"}:
+                buf = result["output"] + item["text"]
+                result["output"] = buf[-65536:]
+                result["truncated"] |= len(buf) > 65536
+            elif item["type"] == "exit":
+                result["exitCode"] = item["code"]
+    return result
 
 
 async def stop_process(process: subprocess.Popen):

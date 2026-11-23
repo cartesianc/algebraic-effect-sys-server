@@ -35,7 +35,7 @@ def read_message(pipe):
     return json.loads(pipe.read(length))
 
 
-def definitions(root: Path, main: Path, positions):
+def query_symbols(root: Path, main: Path, positions, method):
     tool = hls_tool()
     if not tool:
         return []
@@ -76,27 +76,42 @@ def definitions(root: Path, main: Path, positions):
             send(method="initialized", params={})
             send(method="textDocument/didOpen", params={"textDocument": {
                 "uri": uri, "version": 1, "languageId": "haskell", "text": main.read_text(encoding="utf-8-sig")}})
-            paths = []
+            results = []
             for number, (line, column) in enumerate(positions, 1):
-                locations = call(number, "textDocument/definition", {"textDocument": {"uri": uri},
-                                 "position": {"line": line, "character": column}})
-                if not locations:
-                    break
-                locations = locations if isinstance(locations, list) else [locations]
-                files = {Path.from_uri(loc.get("uri") or loc["targetUri"]).resolve() for loc in locations}
-                if len(files) != 1 or not next(iter(files)).is_relative_to(root):
-                    break
-                paths.append(files.pop())
-            call(4, "shutdown", None)
+                results.append(call(number, method, {"textDocument": {"uri": uri},
+                                    "position": {"line": line, "character": column}}))
+            call(len(results) + 1, "shutdown", None)
             send(method="exit")
             process.stdin.close()
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 stop()
-            return paths
+            return results
         except (EOFError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
             return []
         finally:
             timer.cancel()
             stop()
+
+
+def definitions(root: Path, main: Path, positions):
+    paths = []
+    for result in query_symbols(root, main, positions, "textDocument/definition"):
+        if not result:
+            break
+        locations = result if isinstance(result, list) else [result]
+        files = {Path.from_uri(loc.get("uri") or loc["targetUri"]).resolve() for loc in locations}
+        if len(files) != 1 or not next(iter(files)).is_relative_to(root):
+            break
+        paths.append(files.pop())
+    return paths
+
+
+def hover(root, folder, file, line, character):
+    from ..analysis.sources import modules
+    path = modules(folder, False).get(file)
+    if path is None:
+        raise FileNotFoundError(file)
+    result = query_symbols(root, path, [(line, character)], "textDocument/hover")
+    return {"file": file, "line": line, "character": character, "hover": result[0] if result else None}

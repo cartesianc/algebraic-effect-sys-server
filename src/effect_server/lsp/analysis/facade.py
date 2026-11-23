@@ -27,10 +27,8 @@ def list_entries(raw: bytes, count: int):
     return []
 
 
-def method_definitions(raw: bytes, names: set[str]) -> dict:
-    result = {name: [] for name in names}
+def method_nodes(raw: bytes, names: set[str]):
     block = Parser(HASKELL).parse(raw).root_node.child_by_field_name("declarations")
-    digest = revision(raw)
     for instance in block.named_children if block else ():
         if instance.type != "instance":
             continue
@@ -45,10 +43,17 @@ def method_definitions(raw: bytes, names: set[str]) -> dict:
                 continue
             handler = name.text.decode()
             if handler in names and cls_name == handler[:1].upper() + handler[1:] + "Handler":
-                result[handler].append({
-                    "file": "Handlers.hs", "revision": digest, "line": method.start_point.row + 1,
-                    "endLine": method.end_point.row + 1, "source": method.text.decode(),
-                })
+                yield handler, method
+
+
+def method_definitions(raw: bytes, names: set[str]) -> dict:
+    result = {name: [] for name in names}
+    digest = revision(raw)
+    for name, method in method_nodes(raw, names):
+        result[name].append({
+            "file": "Handlers.hs", "revision": digest, "line": method.start_point.row + 1,
+            "endLine": method.end_point.row + 1, "source": method.text.decode(),
+        })
     return result
 
 

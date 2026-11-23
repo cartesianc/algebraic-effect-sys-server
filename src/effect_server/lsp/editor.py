@@ -16,6 +16,20 @@ from .project.hls import hls_tool, read_message, write_message
 from .runtime.commands import stop_process
 
 
+TOKEN_TYPES = ["namespace", "type", "class", "enum", "interface", "typeParameter", "parameter",
+               "variable", "property", "enumMember", "function", "method", "macro", "operator"]
+HLS_SETTINGS = {"haskell": {"plugin": {"semanticTokens": {"globalOn": True}}}}
+
+
+def editor_setting(section):
+    value = HLS_SETTINGS
+    for key in section.split(".") if section else ():
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    return value
+
+
 def match_glob(path: Path, pattern: str) -> bool:
     group = re.search(r"\{([^{}]*)\}", pattern)
     if group:
@@ -46,6 +60,8 @@ async def editor_session(ws: WebSocket, root: Path, folder: Path):
     last_log = deque(maxlen=5)
     opened = {}
     watch_requested = asyncio.Event()
+    token_legend = []
+    token_id = -2  # Positive IDs belong to browser queries, -1 to shutdown.
 
     def drain_log():
         for line in process.stderr:
@@ -60,7 +76,7 @@ async def editor_session(ws: WebSocket, root: Path, folder: Path):
         params = message.get("params", {})
         result = None
         if method == "workspace/configuration":
-            result = [None for _ in params.get("items", [])]
+            result = [editor_setting(item.get("section")) for item in params.get("items", [])]
         elif method == "workspace/workspaceFolders":
             result = [{"uri": root.as_uri(), "name": root.name}]
         elif method == "client/registerCapability":
@@ -95,6 +111,7 @@ async def editor_session(ws: WebSocket, root: Path, folder: Path):
         return None
 
     async def from_hls():
+        nonlocal token_legend
         while True:
             msg = await asyncio.to_thread(read_message, process.stdout)
             if "method" in msg:
@@ -111,6 +128,9 @@ async def editor_session(ws: WebSocket, root: Path, folder: Path):
             if number == 0:
                 if "error" in msg:
                     raise ValueError(msg["error"]["message"])
+                provider = msg["result"]["capabilities"].get("semanticTokensProvider") or {}
+                if provider.get("full") or isinstance(provider.get("full"), dict):
+                    token_legend = provider["legend"]["tokenTypes"]
                 await send(method="initialized", params={})
                 ready.set()
                 await ws.send_json({"type": "ready"})
@@ -120,12 +140,18 @@ async def editor_session(ws: WebSocket, root: Path, folder: Path):
             elif number in pending:
                 kind, name, version = pending.pop(number)
                 result = msg.get("result")
-                if kind == "definition":
+                if kind == "tokens":
+                    if versions.get(name) == version and isinstance(result, dict) and "data" in result:
+                        await ws.send_json({"type": kind, "file": name, "version": version,
+                                            "legend": token_legend, "data": result["data"]})
+                    continue
+                elif kind == "definition":
                     result = definition(result)
                 await ws.send_json({"type": kind, "id": number, "file": name, "version": version,
                                     "result": result, "error": (msg.get("error") or {}).get("message")})
 
     async def from_browser():
+        nonlocal token_id
         while True:
             msg = await ws.receive_json()
             kind, name = msg.get("type"), msg.get("file")
@@ -145,6 +171,14 @@ async def editor_session(ws: WebSocket, root: Path, folder: Path):
                     await send(method="textDocument/didChange", params={"textDocument": {**document, "version": version},
                                "contentChanges": [{"text": msg["text"]}]})
                 versions[name] = version
+                if token_legend:
+                    for old, (previous, filename, _) in list(pending.items()):
+                        if previous == "tokens" and filename == name:
+                            del pending[old]
+                            await send(method="$/cancelRequest", params={"id": old})
+                    pending[token_id] = ("tokens", name, version)
+                    await send(id=token_id, method="textDocument/semanticTokens/full", params={"textDocument": document})
+                    token_id -= 1
             elif version == versions.get(name):
                 if kind == "saved":
                     await send(method="textDocument/didSave", params={"textDocument": document})
@@ -184,10 +218,15 @@ async def editor_session(ws: WebSocket, root: Path, folder: Path):
     started = asyncio.create_task(asyncio.wait_for(ready.wait(), 90))
     try:
         await send(id=0, method="initialize", params={"processId": os.getpid(), "rootUri": root.as_uri(),
+                   "initializationOptions": HLS_SETTINGS,
                    "workspaceFolders": [{"uri": root.as_uri(), "name": root.name}],
                    "capabilities": {"workspace": {"configuration": True, "workspaceFolders": True,
                                    "didChangeWatchedFiles": {"dynamicRegistration": True}},
-                                   "textDocument": {"publishDiagnostics": {"versionSupport": True},
+                                   "general": {"positionEncodings": ["utf-16"]},
+                                   "textDocument": {"semanticTokens": {"requests": {"full": True},
+                                                    "tokenTypes": TOKEN_TYPES, "tokenModifiers": [], "formats": ["relative"],
+                                                    "overlappingTokenSupport": False, "multilineTokenSupport": False},
+                                                    "publishDiagnostics": {"versionSupport": True},
                                                     "hover": {"contentFormat": ["plaintext", "markdown"]}}}})
         tasks = {reader, browser, watcher, started}
         while tasks:

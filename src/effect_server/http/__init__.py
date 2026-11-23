@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 import pkgutil
 import sys
@@ -10,14 +11,23 @@ from fastapi.responses import JSONResponse
 from . import router
 from .exception import HttpServiceException
 from .log import logger
+from ..lsp.agent import metadata
+from ..lsp.agent.sync import generate_pending, watch_projects
+from ..lsp.agent.workbench import WorkbenchMCP
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   logger.info("应用程序启动")
-  try:
-    yield
-  finally:
-    logger.info("应用程序关闭")
+  await asyncio.to_thread(metadata.initialize)
+  async with app.state.workbench.transport.run():
+    tasks = [asyncio.create_task(watch_projects()), asyncio.create_task(generate_pending(app.state.workbench))]
+    try:
+      yield
+    finally:
+      for task in tasks:
+        task.cancel()
+      await asyncio.gather(*tasks, return_exceptions=True)
+      logger.info("应用程序关闭")
 
 
 def create_app() -> FastAPI:
@@ -25,6 +35,8 @@ def create_app() -> FastAPI:
   app = FastAPI(lifespan=lifespan)
   # 安装路由
   install_router(app)
+  app.state.workbench = WorkbenchMCP(app)
+  app.mount("/mcp", app.state.workbench)
   
   # 添加中间件
   app.add_middleware(

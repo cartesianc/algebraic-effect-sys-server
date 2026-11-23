@@ -13,12 +13,62 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 
 服务默认监听 `http://127.0.0.1:8000`。
 
+## MCP 与节点资料
+
+本机 MCP 客户端通过 Streamable HTTP 连接 `http://127.0.0.1:8000/mcp/`。用 `tools/list` 查看工具及参数，通过 `prompts/list` 和 `prompts/get` 获取每项操作的提示词、输入结构及相关只读上下文。可以从 `list_projects`、`list_namespaces` 和 `read_facade` 开始。修改源码或节点资料时，使用相应读取工具返回的 `revision`。
+
+`read_handler_context` 和 `draft_handler` 共用写作上下文。指定 Effect 注册名、role 和 method 后，服务会沿 input、资产契约、共享 Handler、故障处理和有效报告中的挂载范围收集关联注册，并从磁盘上该方法的 Layer 提取对应的 SDK 类方法签名。MCP 客户端可以调用 `inspect_symbol`，草稿请求也可携带 `symbol: {file, line, character}`，按需用 HLS 查询手写模块里的符号类型。行和 UTF-16 列均从零开始。网页的 Handler 按钮通过本机 Codex CLI 生成方法体，`save_handler` 在临时副本中调用 SDK 编译验证后写入。服务端提示词集中在 `src/effect_server/lsp/agent/prompt.py`。
+
+FastAPI 启动时会在 `EFFECT_CONSOLE_DIR`（默认 `.console`）下的 `projects.sqlite3` 创建命名空间表和节点表。后台通过 LSP 的命名空间入口和 SDK 读取已保存的源码，按项目、命名空间和注册名核对节点。每张 Effect 或资产卡片独占一次 Codex 会话，每个后端进程最多同时翻译 4 张，逐张写回。优先领取资产；相关资产正在翻译时，Effect 等待其结果，再读取已有的资产译名。注册重命名视为旧标识删除、新标识创建。Workflow 中的多次引用共用同一条记录。
+
+翻译提示词带上框架的执行规则，以及该卡片绑定的各角色、Handler 实现、磁盘上的 Layer 与对应 SDK 类方法签名。缺少生成契约时，会按手写声明筛选候选类方法并注明来源。Effect 说明按实现里的值操作顺序，用业务语言描述读取、条件、变换和交付。资产说明从生产者的 parser 解释值的来历，标题须能独立读作名词，有动宾歧义时用“的”消歧或改写。
+
+在启动环境中将 `EFFECT_METADATA_PROJECTS` 设为允许自动发送至 Codex 的项目 ID（多个 ID 用逗号分隔，可从 `list_projects` 读取）。其他项目也会建立本地索引，用户可以在卡片上单独请求翻译。
+
+React 将翻译和 Handler 草稿请求交给 FastAPI，由服务端调用本机 Codex CLI。Effect 和资产的单卡、批量及后台翻译共用 `translation` 设置，默认为 `gpt-6.1-terra` / `medium`。Handler 草稿使用 `codegen` 设置，默认为 `gpt-6.1-sol` / `high`。
+
+### 在新设备上使用 Codex
+
+在运行 FastAPI 的机器上安装 Codex CLI，用运行服务的系统账户执行 `codex login`，再用 `codex login status` 确认。已登录的账户可直接使用。浏览器只请求 FastAPI。无桌面的 Linux 可使用 `codex login --device-auth` 完成登录。[官方安装方式](https://developers.openai.com/codex/cli) · [登录与设备授权](https://developers.openai.com/codex/auth)
+
+工作台优先使用可选的 `EFFECT_CODEX`，平时可以留空。服务会从自己的 `PATH` 查找 CLI，也支持以下默认安装位置。
+
+| 环境 | 默认查找位置 |
+| --- | --- |
+| Windows | 官方独立安装目录、当前用户的 npm 全局安装目录，以及该用户已注册的 Codex 桌面应用 |
+| Linux / WSL | 当前 Linux 用户的 `~/.local/bin/codex` |
+| macOS | `~/.local/bin/codex`、Homebrew 标准目录，以及 `/Applications/Codex.app` 内的 CLI |
+
+自定义安装目录可将 `EFFECT_CODEX` 设为可执行文件的绝对路径。npm 安装的 CLI 还需要服务能找到 Node.js。用 systemd、容器或其他账户运行时，从该服务环境检查登录、可写的临时目录和网络。已有自定义 `CODEX_HOME` 的账户应让服务继承同一设置。模型列表可用 `codex debug models` 核对；生成还要求该账户有权使用所选模型。
+
+可在服务的 Python 环境运行以下只读检查，输出实际选中的启动程序。
+
+```sh
+poetry run python -c "from effect_server.lsp.agent.codex import command; print(command())"
+```
+
+迁移工作台时在新机器重新导入项目，并用本机的 GHC/Cabal 构建 SDK。项目绑定包含本机绝对路径。需要自动翻译时，用新机器返回的项目 ID 配置 `EFFECT_METADATA_PROJECTS`。
+
+模型设置保存在工作台的 `projects.sqlite3`，对该服务的所有项目生效。每次启动模型调用时读取对应设置。通过以下 FastAPI 接口管理，HTTP 请求携带工作台允许的 `Origin`，本地默认为 `http://127.0.0.1:3000`。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/api/v1/console/agent/models` | 列出服务端 Codex 的 GPT 模型和各模型支持的推理强度 |
+| GET | `/api/v1/console/agent/models/{purpose}` | 读取 `translation` 或 `codegen` 的当前设置 |
+| PUT | `/api/v1/console/agent/models/{purpose}` | 更新指定用途。请求体格式为 `{"model":"gpt-6.1-sol","reasoning_effort":"high"}` |
+
+三个接口分别对应 MCP 工具 `list_agent_models`、`read_agent_model` 和 `set_agent_model`。
+
+工作台顶栏的「重新生成翻译」对应 `regenerate_namespace_translations`，为当前命名空间的未锁定 Effect 和资产排队重译。用 `translation_status` 查询进度。Effect 按注册名、资产按 `asset:契约名` 定位。业务分析的生成图和优化后的 Workflow 共享 SQLite 译名，可通过「翻译」切换显示。网页通过 FastAPI 轮询卡片状态，发现待翻译的卡片时每秒查询，空闲时每 8 秒查询。已完成的译文随下一次响应显示，尚未完成的卡片沿用已有译名或注册名。
+
+`read_node_metadata` 返回译文、编辑标记、锁和版本。`edit_node_metadata` 可以修改译文或设置 `locked`。下一次翻译会参考人工修改过的字段，成功写回后清除编辑标记；失败时保留原文和标记。`generate_node_metadata` 单独翻译一张卡片。加锁会跳过自动、单卡和批量翻译，也会阻止已发起的旧任务覆盖译文。
+
 手写源码页可以使用服务端的 Haskell Language Server（HLS）检查未保存的代码、查看类型和跳转到定义。打开手写源码页时才启动 HLS，同一编辑页中的文件共享进程；退出页面时释放。服务端从 PATH 查找 `haskell-language-server-wrapper`，也可用 `EFFECT_HLS` 指定可执行文件。缺少 HLS 时仍可编辑和保存，SDK 编译与执行使用项目自身的 GHC/Cabal 环境。安装支持项目 GHC 版本的 HLS 后，可在编辑页重新连接。参见 [HLS 安装指南](https://haskell-language-server.readthedocs.io/en/stable/installation.html)。
 
 <a id="framework-root"></a>
 ## 绑定框架工作树
 
-服务分析和改动的是一个本地框架工作树，即 `algebraic-effect-sys-in-haskell` 的检出目录。启动时用环境变量指定，网页和 HTTP 接口都不能更改。一个服务进程只绑定一个工作树，换工作树要重启服务。
+工作台通过项目 ID 绑定本机工作树，支持从网页或 MCP 新建、导入和切换项目。下面的环境变量可指定启动时可用的默认工作树。
 
 | 环境变量 | 内容 | 未设置时 |
 | --- | --- | --- |

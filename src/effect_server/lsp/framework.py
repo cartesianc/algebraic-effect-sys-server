@@ -27,15 +27,15 @@ class Framework:
         prefix = ["--source-dir", directory] if directory != "demo" else []
         return [str(self.executable.resolve()), *prefix, *arguments]
 
-    def run(self, *arguments: str, source: str = "") -> bytes:
+    def run(self, *arguments: str, source: str = "", timeout: float | None = None) -> bytes:
         result = subprocess.run(
             self.command(*arguments),
-            cwd=self.root, input=source.encode("utf-8"), capture_output=True, env=self.environment(),
+            cwd=self.root, input=source.encode("utf-8"), capture_output=True, env=self.environment(), timeout=timeout,
         )
         if result.returncode:
             raise ValueError(result.stderr.decode("utf-8", errors="replace").strip()
                              or f"effect-codegen exited with {result.returncode}")
         return result.stdout
 
-    def read_json(self, *arguments: str, source: str = "") -> dict:
-        return json.loads(self.run(*arguments, source=source).decode("utf-8"))
+    def read_json(self, *arguments: str, source: str = "", timeout: float | None = None) -> dict:
+        return json.loads(self.run(*arguments, source=source, timeout=timeout).decode("utf-8"))

@@ -94,8 +94,10 @@ def module_facts(path: Path, timestamp: int, size: int):
     return module_name(tree), entry_use(tree, raw)
 
 
-def entries(root: Path) -> dict[str, Entry]:
-    mains, modules, versions = [], {}, []
+def entries(root: Path, *, versions=None) -> dict[str, Entry]:
+    mains, modules = [], {}
+    if versions is None:
+        versions = []
     for directory, dirs, files in root.walk():
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in IGNORED
                          and (directory / d).resolve() == directory / d)

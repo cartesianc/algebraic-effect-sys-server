@@ -10,9 +10,9 @@ def read_effect(source: str, framework: Framework) -> dict:
     return document
 
 
-def read_namespace(namespace: str, framework: Framework) -> dict:
+def read_namespace(namespace: str, framework: Framework, *, timeout: float | None = None) -> dict:
     """Read the effects of a trusted namespace; helper-built registrations are read-only."""
-    result = framework.read_json("read-effects", namespace)
+    result = framework.read_json("read-effects", namespace, timeout=timeout)
     if result.get("schemaVersion") != VERSION:
         raise ValueError("Unsupported namespace schemaVersion")
     if result["editable"]:

@@ -9,7 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from ..analysis.facade import list_entries, method_definitions
+from ..analysis.facade import list_entries, method_definitions, method_nodes
 from ..analysis.read import read_namespace
 from ..analysis.sources import modules, namespace_folder
 from ..framework import Framework
@@ -42,6 +42,7 @@ class Handler(BaseModel):
     name: str
     body: str
     new_effect: bool = False
+    replace_body: bool = False
     input: str = "Root"
 
 
@@ -121,12 +122,32 @@ def record_field(record, field):
                  if f.child_by_field_name("field").text.decode() == field), None) if record else None
 
 
+def replace_body(raw, method, body):
+    matches = [node for _, node in method_nodes(raw, {method})]
+    if len(matches) != 1 or not body.strip():
+        raise ValueError("需要唯一的 Handler 实现和非空方法体。")
+    node = matches[0]
+    clauses = node.children_by_field_name("match")
+    if len(clauses) != 1 or clauses[0].child_by_field_name("guards"):
+        raise ValueError("含守卫或多个等式的实现请在手写源码页编辑。")
+    expr = clauses[0].child_by_field_name("expression")
+    if expr is None:
+        raise ValueError("找不到原方法体。")
+    indent = expr.start_point.column if expr.start_point.row != node.start_point.row else node.start_point.column + 2
+    replacement = ("\n" + " " * indent).join(body.strip().splitlines())
+    return raw[:expr.start_byte] + replacement.encode() + raw[expr.end_byte:]
+
+
 def edits(spec, ns, files, framework):
     rows = read_namespace(ns, framework)["registrations"]
     effects = {r["effect"]["name"]: r["effect"] for r in rows}
     if isinstance(spec, WorkflowEdit):
         return workflow_edit(spec, ns, files, {n for n, e in effects.items() if e["typing"]["kind"] in {"Excu", "Scoped"}})
     raw = files["Effects.hs"]
+    if isinstance(spec, Handler) and spec.replace_body:
+        if spec.new_effect or effects.get(spec.effect, {}).get("typing", {}).get(spec.role) != spec.name:
+            raise RegistrationConflict("Handler 绑定已改变，请重新生成草稿。")
+        return {"Handlers.hs": replace_body(files.get("Handlers.hs", b""), spec.name, spec.body)}
     changes = {}
     if isinstance(spec, Registration):
         effect = validate_effect(spec.registration)

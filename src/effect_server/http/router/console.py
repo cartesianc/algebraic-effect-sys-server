@@ -1,15 +1,19 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request, WebSocket, WebSocketException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, WebSocket, WebSocketException
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.requests import HTTPConnection
 
 from ...config import get_app_config
 from ...lsp.analysis.facade import facade
+from ...lsp.agent.codex import command as codex_command, draft_response
+from ...lsp.agent.prompt import DraftRequest
+from ...lsp.agent import metadata, model_settings
 from ...lsp.analysis.prototype import read_prototype
 from ...lsp.analysis.sources import namespace_folder, save_facade, source_document
 from ...lsp.analysis.source_workflow import source_workflow
@@ -18,11 +22,12 @@ from ...lsp.codegen.authoring import Asset, Handler, Registration, WorkflowEdit,
 from ...lsp.framework import Framework
 from ...lsp.editor import editor_session
 from ...lsp.project.entries import entries, entry_for
+from ...lsp.project.hls import hover
 from ...lsp.project.model import constructor_name
 from ...lsp.project.picker import browse
 from ...lsp.project.scaffold import create_namespace
 from ...lsp.project.workspaces import absolute, build_sdk, create_in_folder, import_project, lookup, new_project, project_target, projects, startup_project
-from ...lsp.runtime.commands import command_output, generate_graph
+from ...lsp.runtime.commands import command_output, command_result, generate_graph
 from ...lsp.runtime.snapshot import RegistrationConflict, console_home, directory, project_directory
 from ...lsp.runtime.workflow import AstLoadError, generated_workflow, optimize_workflow
 
@@ -82,6 +87,24 @@ class NewProject(BaseModel):
 @router.get("/projects", dependencies=[Depends(require_origin)])
 def list_projects():
     return projects()
+
+
+@router.get("/agent/models", dependencies=[Depends(require_origin)])
+def list_agent_models() -> list[model_settings.ModelOption]:
+    try:
+        return model_settings.catalog()
+    except RuntimeError as error:
+        raise HTTPException(503, str(error)) from error
+
+
+@router.get("/agent/models/{purpose}", dependencies=[Depends(require_origin)])
+def read_agent_model(purpose: model_settings.Purpose) -> model_settings.ModelSelection:
+    return model_settings.current(purpose)
+
+
+@router.put("/agent/models/{purpose}", dependencies=[Depends(require_origin)])
+def set_agent_model(purpose: model_settings.Purpose, body: model_settings.ModelSelection) -> model_settings.ModelSelection:
+    return workbench_call(model_settings.save, purpose, body, list_agent_models())
 
 
 @router.post("/projects/import", dependencies=[Depends(require_origin)])
@@ -226,6 +249,12 @@ def handwritten_module(namespace: str, request: Request, file: str | None = None
     return workbench_call(source_document, bound_folder(namespace, request), False, file)
 
 
+@workspace.get("/namespaces/{namespace}/facade/hover")
+def inspect_symbol(namespace: str, request: Request, file: str, line: int = Query(ge=0), character: int = Query(ge=0)):
+    folder = bound_folder(namespace, request)
+    return workbench_call(hover, Path(project_root(request)).resolve(), folder, file, line, character)
+
+
 @workspace.get("/namespaces/{namespace}/facade/workflow")
 def handwritten_workflow(namespace: str, request: Request):
     files = workbench_call(source_files, bound_folder(namespace, request))
@@ -273,7 +302,10 @@ async def optimize(namespace: str, request: Request):
 @workspace.post("/namespaces/{namespace}/commands/{action}")
 async def command(namespace: str, action: Literal["compile", "run"], request: Request):
     framework = await asyncio.to_thread(bound_framework, request, namespace)
-    return StreamingResponse(command_output(request, framework, namespace, action == "run"),
+    events = command_output(request, framework, namespace, action == "run")
+    if request.headers.get("accept") == "application/json":
+        return await command_result(events)
+    return StreamingResponse(events,
                              media_type="application/x-ndjson",
                              headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
@@ -294,6 +326,25 @@ def authoring_options(namespace: str, request: Request):
     return workbench_call(editor, namespace, bound_framework(request, namespace))
 
 
+@workspace.post("/namespaces/{namespace}/authoring/handler-draft")
+def draft_handler(namespace: str, document: DraftRequest, request: Request):
+    framework = bound_framework(request, namespace)
+    tool = codex_command()
+    if not tool:
+        raise HTTPException(503, "服务端未找到 Codex CLI，请安装并登录，或设置 EFFECT_CODEX。")
+    mcp = request.app.state.workbench
+    prompt, context = workbench_call(mcp.handler_context, framework, namespace, document)
+    return StreamingResponse(draft_response(request, mcp.generate_handler(tool, prompt, context)), media_type="application/json",
+                             headers={"Cache-Control": "no-store"})
+
+
+@workspace.post("/namespaces/{namespace}/authoring/handler-context")
+def read_handler_context(namespace: str, document: DraftRequest, request: Request):
+    prompt, meta = workbench_call(request.app.state.workbench.handler_context,
+                                  bound_framework(request, namespace), namespace, document)
+    return {"context": json.loads(prompt), **meta}
+
+
 @workspace.post("/namespaces/{namespace}/authoring", status_code=201)
 def edit_business(namespace: str, document: Asset | Handler | WorkflowEdit | Registration, request: Request, if_match: str = Header()):
     return workbench_call(save_edit, namespace, document, if_match.strip('"'), bound_framework(request, namespace))
@@ -305,6 +356,47 @@ def initialize_namespace(request: Request, namespace: str = Body(), source_dir: 
     if not (root := project_root(request)):
         raise HTTPException(503, "请先导入或新建项目。")
     return workbench_call(create_namespace, Path(root).resolve(), namespace, source_dir)
+
+
+node_metadata = "/projects/{project_id}/namespaces/{namespace}/nodes/{name}/metadata"
+
+
+@router.get("/projects/{project_id}/namespaces/{namespace}/aliases", dependencies=[Depends(bind_project)])
+def node_aliases(project_id: str, namespace: str) -> dict[str, str]:
+    return workbench_call(metadata.aliases, project_id, namespace)
+
+
+@router.get("/projects/{project_id}/namespaces/{namespace}/translations/cards", dependencies=[Depends(bind_project)])
+def card_translations(project_id: str, namespace: str):
+    return workbench_call(metadata.card_translations, project_id, namespace)
+
+
+@router.get(node_metadata, dependencies=[Depends(bind_project)])
+def read_metadata(project_id: str, namespace: str, name: str):
+    return workbench_call(metadata.read, project_id, namespace, name)
+
+
+translations_path = "/projects/{project_id}/namespaces/{namespace}/translations"
+
+
+@router.get(translations_path, dependencies=[Depends(bind_project)])
+def translation_status(project_id: str, namespace: str):
+    return workbench_call(metadata.translations, project_id, namespace)
+
+
+@router.post(translations_path, dependencies=[Depends(bind_project)], status_code=202)
+def regenerate_translations(project_id: str, namespace: str):
+    return workbench_call(metadata.translations, project_id, namespace, True)
+
+
+@router.patch(node_metadata, dependencies=[Depends(bind_project)])
+def edit_metadata(project_id: str, namespace: str, name: str, body: metadata.MetadataEdit, if_match: str = Header()):
+    return workbench_call(metadata.edit, project_id, namespace, name, if_match.strip('"'), body)
+
+
+@router.post(node_metadata, dependencies=[Depends(bind_project)], status_code=202)
+def generate_metadata(project_id: str, namespace: str, name: str, if_match: str = Header()):
+    return workbench_call(metadata.regenerate, project_id, namespace, name, if_match.strip('"'))
 
 
 router.include_router(workspace, prefix="/projects/{project_id}", dependencies=[Depends(bind_project)])
