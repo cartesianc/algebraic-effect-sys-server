@@ -125,7 +125,7 @@ poetry run granian --interface asgi --host 127.0.0.1 effect_server.http:app
 | `GET /authoring` | 返回手写源码版本、注册、已实现方法、资产表示类型及可编辑分支。 |
 | `POST /authoring` | 使用上述版本作为 `If-Match`，按 `kind` 提交 asset、handler 或 workflow。注册时同时新建方法使用 `kind=registration`、Facade 的版本和按方法名索引的 `handlers`。服务在候选副本中运行 SDK 编译器，成功后写回业务文件。 |
 | `GET /gened?file=Handlers.hs` | tree-sitter-haskell 解析磁盘上的 Generated 模块，返回原文、模块名、定义行范围、模块内同名引用及语法诊断。 |
-| `GET /plan` | tree-sitter-haskell 读取 `Generated/Prototype.hs` 的 effect、方法图、选择分支和资产关系，结合可用的 `Generated/Handlers.hs` 显示实现。已有原型直接返回图，缺文件返回 JSON `null`，语法或结构错误返回 422。 |
+| `GET /plan` | 从 `Generated/Prototype.hs` 读取消费链、生产路径和方法图。使用闭包模型的 SDK 还从 `Generated/Program.hs` 读取实际挂载的回调和静态来源，结合 `Generated/Handlers.hs` 区分触发条件和取值方式。缺少原型返回 JSON `null`。旧项目仍可查看原型声明的关系。 |
 | `POST /plan` | 用户点击「生成图分析」时调用。持有命名空间锁期间，缺原型才运行已有的 `effect-codegen compiler Namespace`，再读取生成的 Haskell 文件。 |
 
 命令行运行 `poetry run python -m effect_server.lsp --root $framework --sdk $sdk inspect FacadeProbe --cards` 可取得同一份卡片模型。

@@ -1,57 +1,15 @@
 """Read the SDK's emitted Haskell value without loading or executing a module."""
 
 import os
-import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
 from tree_sitter import Parser
 
+from .generated_syntax import application, field, items, name, record, string
+from .program import compiled_relations, handler_reads
 from .sources import HASKELL
-
-
-def field(node, name):
-    value = node.child_by_field_name(name)
-    if value is None:
-        raise ValueError(f"缺少字段 {name}")
-    return value
-
-
-def name(node):
-    return node.text.decode().rsplit(".", 1)[-1]
-
-
-def items(node):
-    if node.type not in ("list", "tuple"):
-        raise ValueError("预期列表或元组")
-    return node.children_by_field_name("element")
-
-
-def record(node):
-    if node.type != "record":
-        raise ValueError("预期 Haskell 记录")
-    return {name(field(f, "field")): field(f, "expression") for f in node.children_by_field_name("field")}
-
-
-def application(node):
-    args = []
-    while node.type in ("apply", "parens"):
-        if node.type == "parens":
-            node = field(node, "expression")
-        else:
-            args.append(field(node, "argument"))
-            node = field(node, "function")
-    return name(node), args[::-1]
-
-
-def string(node):
-    text = node.text.decode()
-    if not (text.startswith('"') and text.endswith('"')):
-        raise ValueError("预期字符串标识符")
-    # GHC's Show uses decimal escapes for non-ASCII identifiers and \& as a terminator.
-    return re.sub(r'\\(\d+|&|"|\\)', lambda m: chr(int(m[1])) if m[1].isdigit()
-                  else "" if m[1] == "&" else m[1], text[1:-1])
 
 
 def method(node):
@@ -106,7 +64,7 @@ def workflow(node, selections):
     return tree
 
 
-def consumer_chains(effects, inputs, providers, selected, entry_calls):
+def consumer_chains(effects, inputs, providers, selected, entry_calls, continuous, callback_only):
     origins = {n for n, e in effects.items() if e["typing"]["kind"] in ("Scoped", "Excu")}
     sources = {}
     for ctx, effect in effects.items():
@@ -130,8 +88,10 @@ def consumer_chains(effects, inputs, providers, selected, entry_calls):
             visited.add(key)
             asset = effects[ctx]["typing"]["asset"]["contract"]
             source = sources[asset]
-            branch = dict(source, context=ctx, asset=asset, feeds=feeds, via=via,
-                          session=effects[ctx]["typing"]["stream"])
+            # The legacy "session" flag also keeps an externally delivered asset
+            # separate from the reader's Input predecessors in the graph layout.
+            delivered = ctx in continuous or (feeds or n, asset) in callback_only
+            branch = dict(source, context=ctx, asset=asset, feeds=feeds, via=via, session=delivered)
             anchor = source["anchor"]
             if anchor and not branch["session"]:
                 parent = parents.setdefault(anchor, {"effect": anchor, "via": "anchor", "for": []})
@@ -172,7 +132,7 @@ def consumer_chains(effects, inputs, providers, selected, entry_calls):
     return list(chains.values()), sources
 
 
-def project(root, namespace):
+def project(root, namespace, handlers, program):
     decls = field(root, "declarations")
     header = next(n for n in root.named_children if n.type == "header")
     if field(header, "module").text.decode() != namespace + ".Generated.Prototype":
@@ -185,6 +145,7 @@ def project(root, namespace):
         specs[string(spec["name"])] = typing(spec["typing"])
 
     effects, inputs, owners = {}, {}, {}
+    continuous, sampled, histories, resources = set(), set(), set(), set()
     calls, request_calls = defaultdict(list), defaultdict(set)
     resolved_requests = defaultdict(list)
     accesses = {"RequireAccess": "requires", "RequestAccess": "requests", "StreamAccess": "streams"}
@@ -202,6 +163,16 @@ def project(root, namespace):
             if action == "requests":
                 resolved_requests[n].append(string(provider))
         effects[n] = {"name": n, "typing": specs[n], "input": string(origin), "demands": demands}
+        if specs[n].get("stream") or ("effectContinuous" in fields and name(fields["effectContinuous"]) == "True"):
+            continuous.add(n)
+        if "effectSampled" in fields and name(fields["effectSampled"]) == "True":
+            sampled.add(specs[n]["asset"]["contract"])
+        if "effectHistory" in fields and name(fields["effectHistory"]) == "True":
+            histories.add(specs[n]["asset"]["contract"])
+        if "effectResource" in fields:
+            tag, resource = application(fields["effectResource"])
+            if tag == "Just":
+                resources.add(specs[string(resource[0])]["asset"]["contract"])
         inputs[n] = [string(x) for x in items(fields["effectInputChain"])] if "effectInputChain" in fields else []
         for pair in items(fields["effectMethods"]) if "effectMethods" in fields else ():
             role, ident = items(pair)
@@ -222,13 +193,11 @@ def project(root, namespace):
             calls[owner].append(target)
         if role in ("HandlerMethod", "ScopeOpen", "ContextRequest") and target_role == "ContextRequest":
             request_calls[owner].add(target)
-    # A session request is deliberately absent from graphReferences. Its resolved demand
-    # identifies the delivery; ordinary producer calls are edges in the compiled graph.
-    requests = {n: [p for p in resolved_requests[n] if p in request_calls[n] or specs[p]["stream"]]
+    # A continuous request can start a source without directly calling its parser.
+    requests = {n: [p for p in resolved_requests[n] if p in request_calls[n] or p in continuous]
                 for n in effects}
     selections = defaultdict(list)
     tree = workflow(value["protoWorkflow"], selections)
-    chains, sources = consumer_chains(effects, inputs, requests, selections, calls)
     roles = {"HandlerMethod": "handler", "ScopeOpen": "open", "ScopeClose": "close", "PureHandler": "handler",
              "StreamHandler": "handler", "ContextRequest": "parser", "ContextStream": "parser",
              "ErrorDetect": "detect", "ErrorResolve": "resolve", "MiddlewareHook": "handler"}
@@ -239,38 +208,62 @@ def project(root, namespace):
         n, role = owners[m]
         bindings.append({"effect": n, "method": m, "handler": specs[n].get(roles.get(role)), "source": None,
                          "shape": body.text.decode().strip(), "reachable": reaches.get(m)})
-    return {"schemaVersion": 1, "namespace": namespace, "source": "prototype", "chains": chains,
-            "assetSources": sources, "registrations": [{"effect": e} for e in effects.values()],
+    data = {"schemaVersion": 1, "namespace": namespace, "source": "prototype",
+            "registrations": [{"effect": e} for e in effects.values()],
             "bindings": bindings, "references": references, "workflow": tree}
-
-
-def read_prototype(folder: Path, namespace: str) -> dict | None:
-    path = folder / "Generated" / "Prototype.hs"
-    if path.resolve() != path:
-        raise ValueError("Prototype.hs 路径超出绑定目录。")
-    try:
-        with path.open("rb") as handle:
-            raw = handle.read()
-            modified = os.fstat(handle.fileno()).st_mtime
-    except FileNotFoundError:
-        return None
-    root = Parser(HASKELL).parse(raw).root_node
-    if root.has_error:
-        raise ValueError("Generated/Prototype.hs 存在 Haskell 语法错误。")
-    try:
-        data = project(root, namespace)
-    except (KeyError, IndexError, ValueError, StopIteration, RecursionError) as exc:
-        raise ValueError(f"无法读取 Generated/Prototype.hs 的图结构：{exc}") from exc
-    data["analyzedAt"] = datetime.fromtimestamp(modified, timezone.utc).isoformat()
-    handlers = path.with_name("Handlers.hs")
-    if handlers.resolve() == handlers and handlers.is_file():
-        definitions = Parser(HASKELL).parse(handlers.read_bytes()).root_node.child_by_field_name("declarations")
+    reads = {}
+    if handlers:
+        definitions = handlers.child_by_field_name("declarations")
         bodies = {}
+        bound = {b["handler"] for b in bindings if b["handler"]}
         for decl in definitions.named_children if definitions else ():
             methods = decl.child_by_field_name("declarations") if decl.type == "instance" else None
             for m in methods.named_children if methods else ():
                 if m.type in ("bind", "function") and (ident := m.child_by_field_name("name")):
-                    bodies[name(ident)] = m.text.decode()
-        for b in data["bindings"]:
+                    handler = name(ident)
+                    if handler in bound:
+                        bodies[handler] = m.text.decode()
+                        reads.setdefault(handler, set()).update(handler_reads(m))
+        for b in bindings:
             b["source"] = bodies.get(b["handler"])
+    callback_only = set()
+    if program:
+        try:
+            relations = compiled_relations(program, data, reads, sampled, histories, resources)
+        except (KeyError, IndexError, ValueError, StopIteration, RecursionError) as exc:
+            raise ValueError(f"Generated/Program.hs 的执行闭包无效：{exc}") from exc
+        if relations is not None:
+            data["assetRelations"], callback_only = relations
+    data["chains"], data["assetSources"] = consumer_chains(effects, inputs, requests, selections, calls, continuous, callback_only)
+    return data
+
+
+def read_prototype(folder: Path, namespace: str) -> dict | None:
+    modified = 0.0
+
+    def module(filename):
+        nonlocal modified
+        path = folder / "Generated" / filename
+        if path.resolve() != path:
+            if filename == "Handlers.hs":
+                return None
+            raise ValueError(f"{filename} 路径超出绑定目录。")
+        try:
+            with path.open("rb") as handle:
+                raw = handle.read()
+                modified = max(modified, os.fstat(handle.fileno()).st_mtime)
+        except FileNotFoundError:
+            return None
+        return Parser(HASKELL).parse(raw).root_node
+
+    root = module("Prototype.hs")
+    if root is None:
+        return None
+    if root.has_error:
+        raise ValueError("Generated/Prototype.hs 存在 Haskell 语法错误。")
+    try:
+        data = project(root, namespace, module("Handlers.hs"), module("Program.hs"))
+    except (KeyError, IndexError, ValueError, StopIteration, RecursionError) as exc:
+        raise ValueError(f"无法读取 {namespace} 的生成图：{exc}") from exc
+    data["analyzedAt"] = datetime.fromtimestamp(modified, timezone.utc).isoformat()
     return data

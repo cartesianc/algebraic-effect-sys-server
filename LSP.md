@@ -19,9 +19,11 @@
 
 编辑端通过 `/facade` 调 SDK 的 `read-effects` 解析手写声明。分析端默认通过 `/gened` 在磁盘的 Generated 目录读取 Haskell，使用 tree-sitter-haskell 建立模块、定义与同名引用索引。这里可以审阅上一次生成的代码，即使当前声明已经变更、当前 gen 失败，或没有发布快照。两端的接口与写入版本规则见 [启动与接口说明](README.md)。
 
-当前声明的 gen 剧本单独通过 `/plan` 取得。新版 SDK 的 `chains.parents` 描述 Excu 与 Scoped 的消费关系，`branches` 描述锚点旁的生产步骤、资产及接收方。Crawler 的 `PrintPage` 在声明图中以 Root 为 Input，requests 和 requires 指向 StartPageSummary。在剧本图中，消费路径为 CrawlSession → FetchPage → PrintPage，KeepPageBody → ExtractPage → StartPageSummary 是 FetchPage 的侧枝。方法步骤跟随绑定的 `before` 与 `raw`，按同次调用内的 effect 去重，持续资产显示会话交付。缺少 `chains` 时，界面显示缺少 gen 剧本。[SDK 的消费链规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/436fd72/docs/CORE_DESIGN.md#consumer-chain)
+生成图通过 `/plan` 读取磁盘上的 `Generated/Prototype.hs`。`chains.parents` 描述 Excu 与 Scoped 的消费关系，`branches` 描述锚点旁的生产步骤、资产及接收方。对闭包模型的生成产物，`Generated/Program.hs` 的 `compiledReactions` 给出资产发布后实际运行的节点和作用域，`compiledStatic` 给出可按请求运行至结束的来源。LSP 结合具体方法的读点描述取值方式，同一条关系可以同时表示触发和读取历史。旧生成文件保留其原型能确认的关系。[SDK 的闭包模型](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/00e3b4b/docs/NEXT_STAGES.md#closure-model)
 
-普通 `requires` 读取已发布的值。若没有任何注册请求该契约，SDK 会报告 `Asset never requested`；成功生成还要满足既有的 AST 可达性等检查。alternative 的判定 Context 由 selector 尝试解析。对持续资产，requests 启动或加入会话，把当前一条固定给本次调用；lifelong 末端的 streams 订阅也会驱动会话。requires 只读已有会话。只有 requires、缺少请求方和订阅方时，SDK 同样报告 `Asset never requested`。单独执行普通资产的上游句柄不会自动发布它。注册接口以 422 返回 SDK 诊断原文。切换工作树时重新发布 Console 快照，JSON 仍为 v1。
+普通资产可由锚点的成功输出发布。Handler 的 `require @T` 优先读取本次捕获或最新值。从 SDK `b1d0b23` 起，并行分支还声明自己可能发布的资产。对于普通读取，若兄弟分支具备发布机会，图用 `await` 表示缺值时可以等待；顺序读取、作用域资源以及缺少并行发布证据的读点沿用 `latest`。等待是否实际发生取决于读取时值是否就绪、发布分支是否仍在运行。[SDK 的等待规则](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/4fc49fd/docs/EFFECT_GRAPH.md)
+
+`lifelong` 内的触发条件和回调如何取值可以同时显示。LinesDemo 中，`TextLine` 每次发布都触发 `PrintLine` 和 `TextCounter`。前者的 `require @Line` 读取本次交付（`delivered`），后者的 `stream @Line` 读取截至本次的历史（`history`）。`lifelong` 外，对持续资产的 `requests` 可以运行来源至结束，之后的取值方式由 Handler 决定。
 
 当前工作树的顺序组合写作 `chain [node "Report"]`。SDK 在 Console 快照中将它导出为 `workflow.kind = "Chain"`，Python 原样传递 `kind` 和有序的 `children`。
 
@@ -338,11 +340,11 @@ HLS 诊断走标准 `textDocument/publishDiagnostics`，框架继续走 `framewo
 - **跨文件编辑。** 在 `LinesDemo` 预览一组“新增资产、生产 Context、parser 及读取它的 Excu”的补丁。读回应与规格一致，再次提交相同规格应得到空 diff。磁盘指纹冲突时须重新预览。SDK 支持 agentic 占位后，待填方法和已经能判断的错误分别显示。
 - **类型身份。** 在 `FileDemo` 的候选补丁中，给 `OpenedFile` 使用限定导入或重导出的本地 `FileHandle`。读回仍应解析为 `FileDemo.Types.FileHandle`，生成的类型引用一致。改用形状相同的 `ScopeInstancesDemo.Types.FileHandle` 时应显示 SDK 的外部表示类型诊断并拒绝应用。
 - **写入与重建。** 在默认 `LinesDemo` 中重命名契约 `TextLine` 及其引用。应用后只读检查通过，网页提示需生成。显式生成并复查后提示清除，重建后的 `--structure` 显示 `at [1] TraceLine`。撤销这组编辑、再生成并复查，可恢复原契约。将 `monitorLines` 抽到 `Workflow/MonitorLines.hs` 再合并回去时，两次都应同时更新 Hanging 导入并通过检查。
-- **默认程序输出。** 保留基线的 `input.txt` 和默认 `ast`，从框架根目录运行重建的 `lines-demo`。最后的 `Report` 应只打印一次 `The selected total is: 4 lines, 40 characters.`。两个并行单元的中间输出允许交错。[示例输入](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/demo/LinesDemo/input.txt)
+- **默认程序输出。** 保留基线的 `input.txt` 和默认 `ast`，从框架根目录运行重建的 `lines-demo`。最后的 `Report` 应只打印一次 `The selected total is: 4 lines, 40 characters.`。在闭包模型的生成产物上，每行打印后应立即显示本次累计，再读取下一行。[示例输入](https://github.com/cartesianc/algebraic-effect-sys-in-haskell/blob/ed5273d/demo/LinesDemo/input.txt)
 
 ### 阶段 C　上下文、变更影响与资源观测
 
-- **书写上下文。** 查询 `parseTotal`，可看到 `countText` 输出的行数和字符数两段十进制文本、`Total String String` 的构造器、订阅的 `ShowTotal` 与有限读取的 `Report`，以及两者的实际 `require @Total`。把 `ast` 和 Hanging 目标一起切到 `snapshotAst` 后，`Report` 位于 `[1]`，`TraceLine` 挂在根 `[]`。在 `Report` 上增加 `requests "RunningTotal"` 并保留 requires，使入口启动或加入派生会话。重新生成、构建并运行后，验收 `Report` 执行一次。
+- **书写上下文。** 查询 `parseTotal`，可看到 `countText` 输出的行数和字符数两段十进制文本、`Total String String` 的构造器、订阅的 `ShowTotal` 与有限读取的 `Report`，以及两者的实际 `require @Total`。把 `ast` 和 Hanging 目标一起切到 `snapshotAst` 后，`Report` 位于 `[1]`，`TraceLine` 挂在根 `[]`。在 `Report` 上增加 `requests "RunningTotal"` 并保留 requires，使入口运行静态来源，并让派生的统计随发布更新。重新生成、构建并运行后，验收 `Report` 执行一次。
 - **变更预览。** 在默认工作流中，把 `countText` 的历史统计改为 `Line text <- require @Line`，只输出 `rawoutput ["1", show (length text)]`，保留 `TextCounter` 的 `streams "TextLine"`。预览应显示 `LineParser.effectHistory` 由真变假，`CountTextLayer` 仍有 `Streams Line m`、`EndsStream m`，方法边仍是 `RunTextCounterGen → StreamTextLineGen`。若再把该 demand 改为 `requires`，SDK 在声明阶段报告 `Context CountParser declares stream = True but nothing drives it continuously`。网页显示本次诊断，旧图带上原 revision。
 - **资源生命周期。** 查询 `nextLine` 能定位 `MonadMask`、`bracket` 和释放函数 `liftIO . hClose`。在临时副本分别触发正常 EOF、`parseLine` 对一行执行 `raise`、另一 Haskell 线程在 `bracket` 使用期间向来源线程递送 `ThreadKilled`。在 `openFile` 成功后和实际 `hClose` 完成后分别记录，每例应看到一次打开和一次关闭。parser 失败时还应核对业务输出中的 `Failed` 与来源 `LineParser`，这条路径的程序退出码可以为 0。`closeInput` 的日志单独计数。
 - **历史与交接。** 在有两次发布和两个读取游标的场景中，选中第二条时仍能读到第一条历史。核对交接与开启参数时，来自这份视图的生产身份只有第二条。若另一游标尚欠第一条，其队列条目与伴随绑定仍承担独立的保留义务。实际释放时刻须通过运行观测核验。
